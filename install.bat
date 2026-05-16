@@ -64,6 +64,32 @@ exit /b 0
 echo [OK] Using Python at: %PYTHON%
 "%PYTHON%" --version
 echo.
+
+REM --- Microsoft Visual C++ Redistributable 2015-2022 (required by torch / faster-whisper) ---
+echo Checking Visual C++ Runtime...
+if exist "%WINDIR%\System32\vcruntime140_1.dll" (
+    echo [OK] Visual C++ Runtime 2015-2022 already installed.
+) else (
+    echo Installing Visual C++ Redistributable 2015-2022 ^(x64^)...
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        winget install Microsoft.VCRedist.2015+.x64 --accept-source-agreements --accept-package-agreements --silent
+    ) else (
+        echo Downloading vc_redist.x64.exe...
+        set "VC_URL=https://aka.ms/vs/17/release/vc_redist.x64.exe"
+        set "VC_EXE=%TEMP%\vc_redist.x64.exe"
+        powershell -NoProfile -Command "try { Invoke-WebRequest -Uri '!VC_URL!' -OutFile '!VC_EXE!' -UseBasicParsing } catch { exit 1 }"
+        if exist "!VC_EXE!" (
+            "!VC_EXE!" /install /quiet /norestart
+            del "!VC_EXE!" 2>nul
+        ) else (
+            echo [WARN] Could not auto-install VC++ Runtime. torch/faster-whisper may fail to load.
+            echo        Install manually from https://aka.ms/vs/17/release/vc_redist.x64.exe
+        )
+    )
+)
+
+echo.
 echo Installing dependencies (this may take a few minutes)...
 echo.
 "%PYTHON%" -m pip install --upgrade pip
