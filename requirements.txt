@@ -11,7 +11,6 @@ python-dotenv>=1.0.1
 # --- DLsite / VNDB scraping ---
 httpx==0.28.1
 beautifulsoup4==4.12.3
-lxml==5.3.0
 
 # --- Audio pipeline ---
 # Transcription. GPU support requires a matching CUDA-enabled torch wheel;

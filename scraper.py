@@ -148,7 +148,7 @@ async def fetch_product_page(client: httpx.AsyncClient, product_code: str, site:
         return None, reason
 
     try:
-        soup = BeautifulSoup(resp.text, "lxml")
+        soup = BeautifulSoup(resp.text, "html.parser")
         result = {}
 
         # Voice actors (seiyuu) - JP/EN headers
