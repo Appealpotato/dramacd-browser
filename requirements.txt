@@ -1,0 +1,23 @@
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- Storage / async I/O ---
+aiosqlite==0.20.0
+
+# --- Config ---
+python-dotenv>=1.0.1
+
+# --- DLsite / VNDB scraping ---
+httpx==0.28.1
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
+# --- Audio pipeline ---
+# Transcription. GPU support requires a matching CUDA-enabled torch wheel;
+# see https://pytorch.org/get-started/locally/ for the right index URL.
+faster-whisper>=1.0.3
+torch>=2.0.0
+
+# --- Cover-art thumbnailing ---
+Pillow>=10.0.0

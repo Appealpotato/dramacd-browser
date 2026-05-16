@@ -1,0 +1,401 @@
+/* ========================================
+   APP-WIDE THEME SYSTEM
+   Extends player themes to entire application
+   ======================================== */
+
+/* ========== THEME: STARLIT WITCH TERMINAL ========== */
+body.app-theme-starlit {
+    --bg: #1a1323 !important;
+    --bg-hover: rgba(255, 255, 255, 0.08) !important;
+    --bg-input: #262033 !important;
+    --bg-card: rgba(255, 255, 255, 0.03) !important;
+    --text: #f4eaf7 !important;
+    --text-bright: #ffffff !important;
+    --text-muted: #a893b5 !important;
+    --accent: #e49ac6 !important;
+    --primary-color: #e49ac6 !important;
+    --secondary-color: #a893b5 !important;
+    --border: rgba(244, 234, 247, 0.05) !important;
+    --bg-secondary: rgba(255, 255, 255, 0.03) !important;
+    --glow: rgba(200, 90, 255, 0.35) !important;
+    --success: #81c995 !important;
+    --danger: #ff6b6b !important;
+}
+
+/* ========== THEME: SWEET SPELLCASTER ========== */
+body.app-theme-sweet {
+    --bg: #f5dde8 !important;
+    --bg-hover: rgba(255, 235, 245, 0.85) !important;
+    --bg-input: #ffe8f5 !important;
+    --bg-card: rgba(255, 245, 250, 0.65) !important;
+    --text: #664466 !important;
+    --text-bright: #333333 !important;
+    --text-muted: #998899 !important;
+    --accent: #d98fc8 !important;
+    --primary-color: #d98fc8 !important;
+    --secondary-color: #d8a8d8 !important;
+    --border: rgba(220, 150, 200, 0.2) !important;
+    --bg-secondary: rgba(255, 245, 250, 0.65) !important;
+    --glow: rgba(220, 140, 190, 0.35) !important;
+    --success: #8fb88f !important;
+    --danger: #d97878 !important;
+    /* Light-theme shadows want a soft pink tint, not pure black, so they
+       don't read as smudges over a pastel surface. */
+    --shadow-tint: rgba(140, 80, 110, 0.35) !important;
+}
+
+/* ========== THEME: ECLIPSE HARMONY ========== */
+body.app-theme-eclipse {
+    --bg: #0f141c !important;
+    --bg-hover: #1a2535 !important;
+    --bg-input: #1a212d !important;
+    --bg-card: #1a212d !important;
+    --text: #e9eaef !important;
+    --text-bright: #ffffff !important;
+    --text-muted: #9ca3af !important;
+    --accent: #536dff !important;
+    --primary-color: #536dff !important;
+    --secondary-color: #8b9bff !important;
+    --border: rgba(156, 163, 175, 0.1) !important;
+    --bg-secondary: #263145 !important;
+    --glow: rgba(120, 140, 255, 0.4) !important;
+    --success: #6dd4a8 !important;
+    --danger: #ff6b5b !important;
+}
+
+/* ========== APPLY THEMES TO ALL MAJOR COMPONENTS ========== */
+
+/* Workspace and Layout - ROOT LEVEL */
+body.app-theme-starlit,
+body.app-theme-starlit .workspace,
+body.app-theme-starlit .library-column,
+body.app-theme-starlit main,
+body.app-theme-starlit section {
+    background: #1a1323 !important;
+}
+
+body.app-theme-sweet,
+body.app-theme-sweet .workspace,
+body.app-theme-sweet .library-column,
+body.app-theme-sweet main,
+body.app-theme-sweet section {
+    background: #f5dde8 !important;
+}
+
+body.app-theme-eclipse,
+body.app-theme-eclipse .workspace,
+body.app-theme-eclipse .library-column,
+body.app-theme-eclipse main,
+body.app-theme-eclipse section {
+    background: #0f141c !important;
+}
+
+/* Control Column (Sidebar) */
+body.app-theme-starlit .control-column {
+    background: #1a1323 !important;
+    border-right: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-sweet .control-column {
+    background: #f5dde8 !important;
+    border-right: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-eclipse .control-column {
+    background: #0f141c !important;
+    border-right: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Windows and Panels */
+body.app-theme-starlit .window,
+body.app-theme-starlit .control-window {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-sweet .window,
+body.app-theme-sweet .control-window {
+    background: rgba(255, 245, 250, 0.65) !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-eclipse .window,
+body.app-theme-eclipse .control-window {
+    background: #1a212d !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Tab Buttons */
+body.app-theme-starlit .tab-btn {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+    color: #f4eaf7 !important;
+}
+
+body.app-theme-starlit .tab-btn.active {
+    background: rgba(228, 154, 198, 0.2) !important;
+    border: 1px solid #e49ac6 !important;
+    color: #f4eaf7 !important;
+}
+
+body.app-theme-sweet .tab-btn {
+    background: rgba(255, 245, 250, 0.65) !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+    color: #664466 !important;
+}
+
+body.app-theme-sweet .tab-btn.active {
+    background: rgba(217, 143, 200, 0.3) !important;
+    border: 1px solid #d98fc8 !important;
+    color: #664466 !important;
+}
+
+body.app-theme-eclipse .tab-btn {
+    background: #263145 !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+    color: #e9eaef !important;
+}
+
+body.app-theme-eclipse .tab-btn.active {
+    background: rgba(83, 109, 255, 0.2) !important;
+    border: 1px solid #536dff !important;
+    color: #e9eaef !important;
+}
+
+/* Main Content Area */
+body.app-theme-starlit .main-content,
+body.app-theme-starlit section {
+    background: #1a1323 !important;
+}
+
+body.app-theme-sweet .main-content,
+body.app-theme-sweet section {
+    background: #f5dde8 !important;
+}
+
+body.app-theme-eclipse .main-content,
+body.app-theme-eclipse section {
+    background: #0f141c !important;
+}
+
+/* Card Sections */
+body.app-theme-starlit .card-section {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-sweet .card-section {
+    background: rgba(255, 245, 250, 0.65) !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-eclipse .card-section {
+    background: #1a212d !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Card Headers */
+body.app-theme-starlit .card-header {
+    color: #f4eaf7 !important;
+}
+
+body.app-theme-sweet .card-header {
+    color: #664466 !important;
+}
+
+body.app-theme-eclipse .card-header {
+    color: #e9eaef !important;
+}
+
+/* Inputs and Text Fields */
+body.app-theme-starlit input,
+body.app-theme-starlit textarea,
+body.app-theme-starlit select {
+    background: #262033 !important;
+    color: #f4eaf7 !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-starlit input::placeholder,
+body.app-theme-starlit textarea::placeholder {
+    color: #a893b5 !important;
+}
+
+body.app-theme-sweet input,
+body.app-theme-sweet textarea,
+body.app-theme-sweet select {
+    background: #ffe8f5 !important;
+    color: #664466 !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-sweet input::placeholder,
+body.app-theme-sweet textarea::placeholder {
+    color: #998899 !important;
+}
+
+body.app-theme-eclipse input,
+body.app-theme-eclipse textarea,
+body.app-theme-eclipse select {
+    background: #1a212d !important;
+    color: #e9eaef !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+body.app-theme-eclipse input::placeholder,
+body.app-theme-eclipse textarea::placeholder {
+    color: #9ca3af !important;
+}
+
+/* Detail Panel */
+body.app-theme-starlit .detail-panel {
+    background: #1a1323 !important;
+    border-left: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-sweet .detail-panel {
+    background: #f5dde8 !important;
+    border-left: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-eclipse .detail-panel {
+    background: #0f141c !important;
+    border-left: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Library Items - MOST IMPORTANT */
+body.app-theme-starlit .library-item,
+body.app-theme-starlit [class*="item-card"] {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+    color: #f4eaf7 !important;
+}
+
+body.app-theme-starlit .library-item:hover,
+body.app-theme-starlit [class*="item-card"]:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+body.app-theme-sweet .library-item,
+body.app-theme-sweet [class*="item-card"] {
+    background: rgba(255, 245, 250, 0.65) !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+    color: #664466 !important;
+}
+
+body.app-theme-sweet .library-item:hover,
+body.app-theme-sweet [class*="item-card"]:hover {
+    background: rgba(255, 235, 245, 0.85) !important;
+}
+
+body.app-theme-eclipse .library-item,
+body.app-theme-eclipse [class*="item-card"] {
+    background: #1a212d !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+    color: #e9eaef !important;
+}
+
+body.app-theme-eclipse .library-item:hover,
+body.app-theme-eclipse [class*="item-card"]:hover {
+    background: #263145 !important;
+}
+
+/* Buttons */
+body.app-theme-starlit .btn-primary {
+    background: #e49ac6 !important;
+    color: #1a1323 !important;
+}
+
+body.app-theme-starlit .btn-secondary {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #f4eaf7 !important;
+    border: 1px solid rgba(244, 234, 247, 0.05) !important;
+}
+
+body.app-theme-sweet .btn-primary {
+    background: linear-gradient(135deg, #d98fc8 0%, #d8a8d8 100%) !important;
+    color: white !important;
+}
+
+body.app-theme-sweet .btn-secondary {
+    background: rgba(255, 245, 250, 0.65) !important;
+    color: #664466 !important;
+    border: 1px solid rgba(220, 150, 200, 0.2) !important;
+}
+
+body.app-theme-eclipse .btn-primary {
+    background: #536dff !important;
+    color: white !important;
+}
+
+body.app-theme-eclipse .btn-secondary {
+    background: #263145 !important;
+    color: #e9eaef !important;
+    border: 1px solid rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Progress Bars */
+body.app-theme-starlit .progress-bar {
+    background: rgba(255, 255, 255, 0.05) !important;
+}
+
+body.app-theme-starlit .progress-fill {
+    background: #e49ac6 !important;
+}
+
+body.app-theme-sweet .progress-bar {
+    background: rgba(230, 190, 220, 0.8) !important;
+}
+
+body.app-theme-sweet .progress-fill {
+    background: linear-gradient(90deg, #d98fc8 0%, #d8a8d8 100%) !important;
+}
+
+body.app-theme-eclipse .progress-bar {
+    background: rgba(156, 163, 175, 0.1) !important;
+}
+
+body.app-theme-eclipse .progress-fill {
+    background: #536dff !important;
+}
+
+/* Status Badges */
+body.app-theme-starlit .status-badge {
+    background: rgba(228, 154, 198, 0.2) !important;
+    color: #e49ac6 !important;
+}
+
+body.app-theme-sweet .status-badge {
+    background: rgba(217, 143, 200, 0.2) !important;
+    color: #d98fc8 !important;
+}
+
+body.app-theme-eclipse .status-badge {
+    background: rgba(83, 109, 255, 0.2) !important;
+    color: #536dff !important;
+}
+
+/* Scrollbars */
+body.app-theme-starlit::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03) !important;
+}
+
+body.app-theme-starlit::-webkit-scrollbar-thumb {
+    background: #e49ac6 !important;
+}
+
+body.app-theme-sweet::-webkit-scrollbar-track {
+    background: rgba(255, 245, 250, 0.65) !important;
+}
+
+body.app-theme-sweet::-webkit-scrollbar-thumb {
+    background: #d98fc8 !important;
+}
+
+body.app-theme-eclipse::-webkit-scrollbar-track {
+    background: #1a212d !important;
+}
+
+body.app-theme-eclipse::-webkit-scrollbar-thumb {
+    background: #536dff !important;
+}

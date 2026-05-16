@@ -1,0 +1,5938 @@
+@import url('https://fonts.googleapis.com/css2?family=DotGothic16&family=Inter:wght@400;500;600&display=swap');
+
+/* === Reset & Base === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* === Global thin scrollbar — applied to every scrollable container so the
+   workshop, lyrics, lists etc. all match the sidebar instead of falling back
+   to the default chunky OS bar. */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.28);
+    background-clip: content-box;
+}
+*::-webkit-scrollbar-corner {
+    background: transparent;
+}
+
+html {
+    height: 100%;
+    overflow-y: auto;
+}
+
+:root {
+    --bg: #1a1a2e;
+    --bg-card: #16213e;
+    --bg-hover: #1e2d50;
+    --bg-input: #0f1729;
+    --bg-modal: #16213e;
+    --text: #e0e0e0;
+    --text-muted: #8892a4;
+    --text-bright: #ffffff;
+    --accent: #e94560;
+    --accent-hover: #ff6b81;
+    --accent-dim: color-mix(in srgb, var(--accent) 15%, transparent);
+    --border: #6c4590;
+    --star: #f7b731;
+    --star-empty: #3a3f55;
+    --success: #2ed573;
+    --warning: #ffa502;
+    --tag-bg: #2a3558;
+    --tag-text: #a8b2c8;
+    --radius: 8px;
+    --radius-sm: 4px;
+    --shadow: 0 4px 12px rgba(0,0,0,0.3);
+    --transition: 0.2s ease;
+}
+
+/* === App Loading State === */
+/* Hide app content until Vue.js is mounted and ready */
+#app[data-loading="true"] {
+    visibility: hidden;
+    opacity: 0;
+}
+
+#app[data-loading="false"] {
+    visibility: visible;
+    opacity: 1;
+    transition: opacity 0.15s ease-in;
+}
+
+#app {
+    display: flex;
+    flex-direction: row;
+    height: 100%;
+    min-height: 0; /* REQUIRED */
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans JP', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+
+/* === Layout === */
+.app-header {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.app-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-bright);
+    white-space: nowrap;
+}
+
+.app-title span { color: var(--accent); }
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    flex: 1;
+}
+
+.search-box {
+    position: relative;
+    flex: 1;
+    min-width: 200px;
+    max-width: 400px;
+}
+
+.search-box input {
+    width: 100%;
+    padding: 8px 12px 8px 36px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: border-color var(--transition);
+}
+
+.search-box input:focus { border-color: var(--accent); }
+
+.search-box::before {
+    content: '🔍';
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 14px;
+    opacity: 0.5;
+}
+
+select, .filter-select {
+    padding: 8px 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    min-width: 120px;
+}
+
+select:focus { border-color: var(--accent); }
+
+/* === Buttons === */
+.btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--transition);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: white;
+}
+.btn-primary:hover { background: var(--accent-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-danger {
+    background: #d32f2f;
+    color: white;
+    border: none;
+}
+.btn-danger:hover { background: #b71c1c; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+    background: var(--bg-input);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: var(--bg-hover); }
+
+.btn-icon {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    font-size: 18px;
+    transition: color var(--transition);
+}
+.btn-icon:hover { color: var(--accent); }
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+
+
+/* === Scan paths panel === */
+.scan-paths-panel {
+    margin: 12px 24px 0;
+    padding: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.scan-paths-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-bright);
+}
+
+.scan-paths-help {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 4px 0 8px;
+}
+
+.scan-paths-input {
+    width: 100%;
+    min-height: 88px;
+    padding: 8px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    resize: vertical;
+    outline: none;
+}
+
+.scan-paths-input:focus {
+    border-color: var(--accent);
+}
+
+.scan-recursive-toggle {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.scan-paths-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+.scan-paths-error {
+    color: var(--accent);
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.scan-paths-success {
+    color: var(--success);
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+/* === Stats bar === */
+.stats-bar {
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 24px;
+    display: flex;
+    gap: 20px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.stats-bar .stat { display: flex; gap: 4px; }
+.stats-bar .stat-value { color: var(--text-bright); font-weight: 600; }
+
+
+
+/* === Fetch summary === */
+.fetch-summary {
+    margin: 10px 24px 0;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.fetch-summary-title {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.fetch-summary-stats {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.fetch-summary-reasons {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.reason-pill {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    border-radius: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* === Active Filters === */
+.active-filters {
+    padding: 8px 24px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--accent-dim);
+    border: 1px solid var(--accent);
+    border-radius: 20px;
+    font-size: 12px;
+    color: var(--accent-hover);
+}
+
+.filter-chip button {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+
+.filter-chip button:hover { color: var(--text-bright); }
+
+/* === Grid === */
+.main-content {
+    flex: 1;
+    min-height: 0; /* REQUIRED */
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 20px 24px;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+}
+
+/* === Card === */
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    cursor: pointer;
+    transition: all var(--transition);
+    position: relative;
+}
+
+.card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow);
+}
+
+/* Multi-select state — pink border + soft glow. Replaces the old corner
+   checkbox. Plain click on a selected card deselects; ctrl/cmd-click on any
+   card toggles selection. (See onCardClick in app.js.) */
+.card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent), 0 4px 16px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+/* Hover-revealed quick actions strip in the bottom-right of each card.
+   Currently: Play (jumps straight to Player — no transcript needed) and
+   Send to Workshop. Touch devices reveal on tap. */
+.card-quick-actions {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    z-index: 3;
+    display: flex;
+    gap: 4px;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.card-quick-actions .icon-btn {
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.card:hover .card-quick-actions {
+    opacity: 1;
+    transform: translateY(0);
+}
+.card-quick-actions .icon-btn:hover {
+    background: var(--accent);
+    color: #ffffff !important;
+    border-color: var(--accent);
+}
+@media (hover: none) {
+    .card-quick-actions { opacity: 1; transform: none; }
+}
+
+.card-image {
+    width: 100%;
+    aspect-ratio: 1 / 1.4;
+    background: var(--bg-input);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+
+.card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.card-image .no-image {
+    color: var(--text-muted);
+    font-size: 13px;
+    text-align: center;
+    padding: 12px;
+}
+
+/* Lucide-heart favorite toggle, bottom-left of the cover. Visible only when
+   the item is actually favorited or while hovering the card — non-favorites
+   stay invisible by default so the grid doesn't read as a wall of hearts. */
+.card-heart-btn {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    color: var(--text-bright);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.12s ease, color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.card-heart-btn.active {
+    opacity: 1;
+    transform: none;
+    color: var(--accent);
+}
+.card:hover .card-heart-btn {
+    opacity: 1;
+    transform: none;
+}
+.card-heart-btn:hover {
+    color: var(--text-bright);
+}
+.card-heart-btn.active:hover {
+    color: var(--accent-hover);
+}
+@media (hover: none) {
+    /* Touch devices: always show so users can favorite without a hover state. */
+    .card-heart-btn { opacity: 1; transform: none; }
+}
+
+/* Single "ready" dot top-right of the card. Only renders for fully
+   translated items — every other state is filterable, but doesn't deserve
+   a permanent visual badge. */
+.card-ready-dot {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    z-index: 2;
+}
+
+/* Detail panel — compact action row replacing the giant Play banner. */
+.detail-action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+}
+.detail-play-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+.detail-kebab {
+    margin-left: auto;
+}
+.detail-kebab .icon-btn {
+    width: 28px;
+    height: 28px;
+}
+
+/* Edit toggle pill in the detail action row — same shape as Play pill. */
+.detail-edit-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+
+/* Inline edit panel in the detail side panel. Two-column grid for short
+   fields; .detail-edit-wide spans both columns for arrays/descriptions. */
+.detail-edit-panel {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    margin: 8px 0 12px;
+}
+.detail-edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+}
+.detail-edit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.detail-edit-field.detail-edit-wide {
+    grid-column: 1 / -1;
+}
+.detail-edit-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.detail-edit-field input,
+.detail-edit-field textarea,
+.detail-edit-field select {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-bright);
+    padding: 6px 8px;
+    font-size: 12px;
+    font-family: inherit;
+}
+.detail-edit-field textarea {
+    resize: vertical;
+    min-height: 60px;
+    line-height: 1.4;
+}
+.detail-edit-field input:focus,
+.detail-edit-field textarea:focus,
+.detail-edit-field select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.detail-edit-error {
+    color: var(--accent);
+    font-size: 11px;
+    margin: 8px 0 0;
+}
+/* Inline input + trailing action button (used by the manual-CD
+   archive_path field's Browse… button). Keep the button compact so the
+   input still owns most of the row. */
+.detail-edit-with-action {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+    min-width: 0;
+}
+.detail-edit-with-action input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.detail-edit-with-action .btn {
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 4px 10px;
+}
+.detail-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+/* === VNDB search (games edit panel) ===
+   Search box at the top of the edit panel; dropdown shows up to 10 candidates
+   with thumbnail + title + alttitle + year + developer. Click prefills draft. */
+.vndb-search {
+    margin-bottom: 12px;
+}
+.vndb-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.vndb-search-icon {
+    position: absolute;
+    left: 8px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+.vndb-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 8px 7px 28px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-bright);
+    font-size: 12px;
+}
+.vndb-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.vndb-search-spinner {
+    position: absolute;
+    right: 8px;
+    color: var(--text-muted);
+    font-size: 14px;
+}
+.vndb-search-results {
+    display: flex;
+    flex-direction: column;
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    max-height: 360px;
+    overflow-y: auto;
+}
+.vndb-result-row {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+    padding: 8px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    color: inherit;
+    font: inherit;
+}
+.vndb-result-row:last-child {
+    border-bottom: none;
+}
+.vndb-result-row:hover {
+    background: var(--bg-input);
+}
+.vndb-result-thumb {
+    width: 48px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    flex: 0 0 48px;
+}
+.vndb-result-thumb-empty {
+    background: var(--bg-input);
+    border: 1px dashed var(--border);
+}
+.vndb-result-meta {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+}
+.vndb-result-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.vndb-result-alt {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.vndb-result-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.vndb-result-id {
+    font-family: monospace;
+    opacity: 0.7;
+}
+
+/* Manual cover-upload row in the games edit panel. Inline with the
+   VNDB-prefill flow rather than buried in a kebab menu since this is a
+   primary action for entries that don't have a VNDB record. */
+.vndb-cover-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.vndb-cover-success {
+    color: var(--success);
+    font-size: 11px;
+}
+
+/* Seiyuu tag pills in the detail panel — name is click-to-flip, the small
+   filter icon is the "filter library by this CV" action. */
+.seiyuu-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: default !important;
+}
+.seiyuu-tag-name {
+    cursor: pointer;
+    user-select: none;
+}
+.seiyuu-tag-name:hover {
+    color: var(--accent);
+}
+.seiyuu-tag-filter {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    width: 14px;
+    height: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+    opacity: 0.5;
+    transition: opacity 0.12s ease, color 0.12s ease;
+}
+.seiyuu-tag-filter:hover {
+    opacity: 1;
+    color: var(--accent);
+}
+
+.card-formats {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    display: flex;
+    gap: 4px;
+    z-index: 2;
+}
+
+.format-badge {
+    padding: 2px 6px;
+    background: rgba(0,0,0,0.7);
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-bright);
+    letter-spacing: 0.5px;
+}
+
+/* === Confidence badge === */
+.card-confidence {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 2;
+}
+
+.confidence-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.4;
+}
+
+.confidence-badge.low {
+    background: rgba(255, 165, 2, 0.2);
+    color: var(--warning);
+    border: 1px solid rgba(255, 165, 2, 0.4);
+}
+
+.confidence-badge.high {
+    background: rgba(46, 213, 115, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(46, 213, 115, 0.3);
+}
+
+.confidence-badge.verified {
+    background: rgba(46, 213, 115, 0.25);
+    color: var(--success);
+    border: 1px solid rgba(46, 213, 115, 0.5);
+}
+
+.override-section p { line-height: 1.4; }
+
+.card-body {
+    padding: 10px 12px;
+}
+
+.card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-bright);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4;
+    margin-bottom: 4px;
+}
+
+.card-circle {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+
+.card-code {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.card-rating {
+    display: flex;
+    gap: 2px;
+    margin-top: 4px;
+}
+
+.card-rating .star {
+    font-size: 12px;
+    color: var(--star-empty);
+}
+
+.card-rating .star.filled { color: var(--star); }
+
+/* === Voice actor line on the card ===
+   First two names inline; +N pill if there are more. Follows currentLang
+   via displaySeiyuu(). */
+.card-va-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text);
+    margin-bottom: 4px;
+    min-width: 0;
+}
+.card-va-names {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+.card-va-more {
+    flex: 0 0 auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--bg-input);
+    border-radius: 8px;
+    padding: 1px 6px;
+    line-height: 1.4;
+}
+
+/* === Library view-mode toggle (toolbar) ===
+   Three-icon segmented toggle pushed to the right of the bulk-bar action
+   row. Active button gets the accent border + tint. */
+.view-mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-left: auto;
+}
+.view-mode-toggle .icon-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+/* === Library view modes ===
+   .view-grid is the default cover + meta card. .view-cover is a denser wall
+   of covers only (body hidden, hover tooltip carries metadata). .view-list
+   is a 40px row layout with all metadata inline. */
+.grid.view-cover {
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+}
+.grid.view-cover .card-body {
+    display: none;
+}
+/* Heart, wrench, play stay on the cover (same positions as grid view).
+   The base .card:hover rule fades in quick-actions and heart, so nothing
+   special needed here. */
+.grid.view-cover .card-image {
+    border-bottom-left-radius: var(--radius);
+    border-bottom-right-radius: var(--radius);
+}
+
+.grid.view-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.grid.view-list .card {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    height: 44px;
+    overflow: hidden;
+}
+.grid.view-list .card:hover {
+    transform: none;
+}
+.grid.view-list .card-image {
+    aspect-ratio: 1 / 1;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+}
+.grid.view-list .card-body {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 0 14px;
+    min-width: 0;
+}
+.grid.view-list .card-title {
+    flex: 1 1 auto;
+    -webkit-line-clamp: 1;
+    margin-bottom: 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+.grid.view-list .card-va-line {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+    max-width: 220px;
+    overflow: hidden;
+    color: var(--text-muted);
+}
+.grid.view-list .card-va-names {
+    max-width: 180px;
+}
+.grid.view-list .card-circle {
+    flex: 0 0 auto;
+    margin-bottom: 0;
+    max-width: 180px;
+}
+.grid.view-list .card-code {
+    flex: 0 0 90px;
+    text-align: right;
+    margin-left: auto;
+}
+.grid.view-list .card-rating {
+    display: none;
+}
+.grid.view-list .card-ready-dot {
+    position: static;
+    align-self: center;
+    margin: 0 4px 0 8px;
+    box-shadow: none;
+    flex: 0 0 auto;
+}
+/* Right-edge cluster in list view: wrench/play (quick-actions) just left of
+   the heart, both invisible until hover. Heart additionally stays visible
+   when favorited. Flex `order` puts the body on the left and these three on
+   the right regardless of DOM order. */
+.grid.view-list .card-quick-actions {
+    position: static;
+    flex: 0 0 auto;
+    align-self: center;
+    order: 2;
+    margin-right: 4px;
+    transform: none;
+}
+.grid.view-list .card-quick-actions .icon-btn {
+    background: transparent;
+    backdrop-filter: none;
+}
+.grid.view-list .card-quick-actions .icon-btn:hover {
+    background: var(--accent);
+    color: #ffffff !important;
+}
+.grid.view-list .card-heart-btn {
+    position: static;
+    width: 26px;
+    height: 26px;
+    background: transparent;
+    backdrop-filter: none;
+    opacity: 0;
+    align-self: center;
+    flex: 0 0 auto;
+    margin-right: 8px;
+    order: 3;
+    transform: none;
+    transition: opacity 0.12s ease, color 0.15s ease, background 0.15s ease;
+}
+.grid.view-list .card:hover .card-heart-btn,
+.grid.view-list .card-heart-btn.active {
+    opacity: 1;
+}
+.grid.view-list .card-heart-btn:hover {
+    background: var(--bg-input);
+}
+
+/* === Custom hover tooltip (v-app-tooltip directive) ===
+   Body-anchored absolute element, positioned imperatively by the directive.
+   Fades in after a 2.5s hover delay so it doesn't fire on cursor passes. */
+.app-tooltip {
+    position: fixed;
+    z-index: 1000;
+    /* --bg-card is intentionally near-transparent in some themes (it layers
+       over the page bg via the card stack). Tooltips float free, so use
+       --bg-input which is solid in every theme. */
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+    padding: 8px 12px;
+    pointer-events: none;
+    max-width: 280px;
+    opacity: 0;
+    transform: translateY(2px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.app-tooltip.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+.app-tooltip-row {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.app-tooltip-row.primary {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-bright);
+    white-space: normal;
+    margin-bottom: 2px;
+}
+
+/* === Status indicator on card === */
+.card-status {
+    position: absolute;
+    top: 8px;
+    left: 30px;
+    z-index: 2;
+}
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    border: 1px solid rgba(255,255,255,0.3);
+}
+
+.status-dot.not_translated { background: var(--text-muted); }
+.status-dot.extracted { background: var(--accent-dim); border: 1px solid var(--accent); }
+.status-dot.transcribed { background: var(--warning); }
+.status-dot.translated { background: var(--success); }
+
+/* === Detail Panel (Side Panel) === */
+.overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 200;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.detail-panel {
+    width: 500px;
+    max-width: 90vw;
+    background: var(--bg-modal);
+    height: 100vh;
+    overflow-y: auto;
+    box-shadow: -4px 0 20px rgba(0,0,0,0.5);
+    display: flex;
+    flex-direction: column;
+}
+
+.detail-header {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.detail-cover {
+    width: 100%;
+    max-height: 400px;
+    object-fit: contain;
+    background: var(--bg-input);
+    display: block;
+}
+
+.detail-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(0,0,0,0.6);
+    border: none;
+    color: white;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.detail-close:hover { background: var(--accent); }
+
+/* Hover-reveal overlay button in the bottom-right of the detail-panel cover
+   area (items + games panels both). Opens the OS file dialog directly —
+   replaces the old kebab "Replace cover" menu item. Invisible until the
+   cursor enters the header so it doesn't compete with the cover art. */
+.cover-replace-btn {
+    position: absolute;
+    bottom: 10px;
+    right: 10px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, background 0.15s ease;
+    z-index: 2;
+}
+.detail-header:hover .cover-replace-btn {
+    opacity: 1;
+    pointer-events: auto;
+}
+.cover-replace-btn:hover {
+    background: rgba(0, 0, 0, 0.78);
+    color: var(--accent);
+}
+
+.detail-body {
+    padding: 20px;
+    flex: 1;
+    overflow-y: auto;
+}
+
+.detail-title {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+}
+
+.detail-title-en {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.detail-circle {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 12px;
+}
+
+.detail-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.detail-meta-row {
+    display: flex;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.detail-meta-label {
+    color: var(--text-muted);
+    min-width: 90px;
+    flex-shrink: 0;
+}
+
+.detail-meta-value { color: var(--text); }
+
+/* === Tags in detail === */
+.tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.tag {
+    padding: 3px 10px;
+    background: var(--tag-bg);
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--tag-text);
+}
+
+.tag.custom {
+    background: var(--accent-dim);
+    color: var(--accent-hover);
+    border: 1px solid var(--accent);
+}
+
+/* === User controls in detail === */
+.detail-section {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.detail-section h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 10px;
+}
+
+.rating-picker {
+    display: flex;
+    gap: 4px;
+}
+
+.rating-picker .star {
+    font-size: 24px;
+    cursor: pointer;
+    color: var(--star-empty);
+    transition: color var(--transition);
+}
+
+.rating-picker .star:hover,
+.rating-picker .star.filled { color: var(--star); }
+
+.favorite-toggle {
+    font-size: 24px;
+    cursor: pointer;
+    transition: transform var(--transition);
+}
+
+.favorite-toggle:hover { transform: scale(1.15); }
+
+textarea.notes-input {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+}
+
+textarea.notes-input:focus { border-color: var(--accent); }
+
+.custom-tag-input {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.custom-tag-input input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+}
+
+.custom-tag-input input:focus { border-color: var(--accent); }
+
+.tag-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-left: 4px;
+    font-size: 12px;
+}
+
+.tag-remove:hover { color: var(--accent); }
+
+/* === File list in detail === */
+.file-list {
+    list-style: none;
+    font-size: 12px;
+    font-family: monospace;
+    color: var(--text-muted);
+}
+
+.file-list li {
+    padding: 3px 0;
+    word-break: break-all;
+}
+
+/* === Description === */
+.description-text {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+}
+
+/* === Progress overlay === */
+.progress-overlay {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    box-shadow: var(--shadow);
+    z-index: 300;
+    min-width: 300px;
+}
+
+.progress-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+}
+
+.progress-bar-outer {
+    width: 100%;
+    height: 6px;
+    background: var(--bg-input);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.progress-bar-inner {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Enhanced progress indicators */
+.progress-container {
+    width: 100%;
+    margin: 8px 0;
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+    font-size: 12px;
+}
+
+.progress-info-label {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.progress-info-stats {
+    color: var(--text-muted);
+    font-family: Consolas, monospace;
+}
+
+.progress-bar-wrapper {
+    width: 100%;
+    height: 8px;
+    background: var(--bg-input);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--border);
+}
+
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    position: relative;
+}
+
+.progress-bar-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    right: 0;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.3),
+        transparent
+    );
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.progress-status {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 6px;
+    font-size: 11px;
+}
+
+.progress-status-icon {
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--success);
+}
+
+.progress-status-icon.active {
+    background: var(--accent);
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.progress-current-item {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 200px;
+}
+
+.scan-control-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.scan-control-actions .btn {
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
+/* === Empty state === */
+.empty-state {
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--text-muted);
+}
+
+.empty-state h2 {
+    font-size: 20px;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+
+.empty-state p { margin-bottom: 20px; }
+
+/* === Loading === */
+.loading-spinner {
+    display: flex;
+    justify-content: center;
+    padding: 40px;
+}
+
+.spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* === DLsite link === */
+.dlsite-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+}
+
+/* === Responsive === */
+@media (max-width: 768px) {
+    .app-header { padding: 10px 16px; }
+    .main-content { padding: 12px 16px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+    .detail-panel { width: 100vw; }
+    .header-controls { gap: 6px; }
+    .search-box { max-width: none; min-width: 150px; }
+}
+
+@media (max-width: 480px) {
+    .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+    .card-body { padding: 8px; }
+    .card-title { font-size: 12px; }
+}
+
+/* === Startpage-Inspired Compact Theme Override === */
+:root {
+    --bg: #1e1a1f;
+    --bg-card: #2a2430;
+    --bg-hover: #352e3a;
+    --bg-input: #241f2b;
+    --bg-modal: #262030;
+    --text: #d4cad6;
+    --text-muted: #8d8093;
+    --text-bright: #f1e9f2;
+    --accent: #c4879b;
+    --accent-hover: #d69fb1;
+    --accent-dim: rgba(196, 135, 155, 0.18);
+    --border: #7a4ca3;
+    --star: #e9b27d;
+    --star-empty: #5a4e62;
+    --success: #92c9a7;
+    --warning: #e0ba8d;
+    --tag-bg: #322b39;
+    --tag-text: #cabdcd;
+    --radius: 10px;
+    --shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+}
+
+body {
+    height: 100%;
+    overflow-y: auto;
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    background:
+        radial-gradient(900px 420px at 8% -12%, rgba(196, 135, 155, 0.12), transparent 65%),
+        radial-gradient(800px 380px at 100% 0%, rgba(168, 123, 177, 0.08), transparent 62%),
+        var(--bg);
+    
+}
+
+.app-header {
+    background: rgba(42, 36, 48, 0.92);
+    backdrop-filter: blur(8px);
+    padding: 10px 16px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+}
+
+.app-title {
+    font-size: 16px;
+    font-family: 'Trebuchet MS', 'Verdana', sans-serif;
+    letter-spacing: 0.03em;
+}
+
+.header-controls {
+    gap: 6px;
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.header-controls::-webkit-scrollbar { display: none; }
+.header-controls > * { flex-shrink: 0; }
+
+.search-box {
+    flex: 1 1 260px;
+    min-width: 220px;
+    max-width: 360px;
+}
+
+.search-box input {
+    padding: 7px 10px 7px 28px;
+    border-radius: 7px;
+    font-size: 12px;
+}
+
+.search-box::before {
+    content: 'o';
+    left: 9px;
+    font-size: 11px;
+    opacity: 0.45;
+    font-family: Consolas, monospace;
+}
+
+select, .filter-select {
+    height: 30px;
+    padding: 4px 8px;
+    border-radius: 7px;
+    font-size: 11px;
+    min-width: 96px;
+    max-width: 170px;
+}
+
+.btn {
+    min-height: 30px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    font-size: 11px;
+    font-weight: 500;
+    gap: 4px;
+}
+
+.btn-primary {
+    color: #1f181f;
+    border-color: var(--accent);
+}
+
+.btn-success {
+    background: rgba(146, 201, 167, 0.18);
+    border-color: rgba(146, 201, 167, 0.45);
+    color: #bfe4cc;
+}
+
+.btn-success:hover {
+    background: rgba(146, 201, 167, 0.26);
+}
+
+.header-actions {
+    gap: 6px;
+    flex-wrap: nowrap;
+}
+
+.scan-paths-panel,
+.fetch-summary,
+.progress-overlay {
+    background: rgba(42, 36, 48, 0.88);
+    box-shadow: var(--shadow);
+}
+
+.scan-paths-panel,
+.fetch-summary,
+.active-filters,
+.main-content,
+.stats-bar {
+    margin-left: 16px;
+    margin-right: 16px;
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.stats-bar {
+    background: transparent;
+    border-bottom: none;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    gap: 8px;
+}
+
+.stats-bar .stat {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(42, 36, 48, 0.45);
+}
+
+.main-content {
+    padding-top: 14px;
+}
+
+@media (max-width: 980px) {
+    .app-header {
+        grid-template-columns: 1fr;
+    }
+
+    .header-actions {
+        justify-content: flex-start;
+    }
+
+    .search-box {
+        min-width: 180px;
+        max-width: none;
+    }
+}
+
+/* === Startpage-Like Layout Overhaul === */
+.app-header {
+    display: none;
+}
+
+.workspace {
+    flex: 1;
+    max-width: 1380px;
+    margin: 0 auto;
+    /* Extra breathing space on the left so the sidebar isn't flush against
+       the window edge, and a wider gap between sidebar and library so the
+       two columns feel distinct rather than glued together. */
+    padding: 14px 16px 16px 24px;
+    display: grid;
+    grid-template-columns: 350px 1fr;
+    grid-template-rows: minmax(0, 1fr); /* lets each column scroll independently */
+    gap: 20px;
+    height: 100%;
+    min-height: 0;
+}
+
+.control-column {
+    width: var(--sidebar-width, 280px);
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    min-height: 0;
+    height: calc(100vh - 30px) !important;
+    max-height: calc(100vh - 30px) !important;
+    padding: 0 0 24px 0;
+    box-sizing: border-box;
+    /* Scrollbar styling now lives globally on `*` near the top of the file. */
+}
+
+/* Without this, flex shrinks each section to fit the column → content
+   collectively "fits" so overflow-y never engages, and inner content visually
+   overlaps because each section's frame is smaller than its actual content. */
+.control-column > * {
+    flex-shrink: 0;
+}
+
+.library-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0; /* REQUIRED */
+    overflow: hidden; /* children manage scroll */
+}
+
+.window {
+    background: rgba(42, 36, 48, 0.9);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
+.control-window {
+    padding: 10px;
+}
+
+.window-label {
+    font-family: Consolas, monospace;
+    text-transform: lowercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-bottom: 8px;
+}
+
+.title-window .app-title {
+    margin-bottom: 4px;
+}
+
+.title-subtext {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-bottom: 10px;
+}
+
+.quick-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.quick-row .btn {
+    flex: 1;
+    min-width: 84px;
+}
+
+.control-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
+.control-grid select {
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+}
+
+.control-window .search-box {
+    min-width: 0;
+    max-width: none;
+}
+
+.control-window .search-box input {
+    width: 100%;
+}
+
+.scan-paths-panel,
+.fetch-summary,
+.active-filters,
+.main-content,
+.stats-bar {
+    margin: 0;
+    padding: 0;
+}
+
+.scan-paths-panel {
+    padding: 10px;
+}
+
+.stats-bar {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.stats-bar .stat {
+    font-size: 11px;
+}
+
+.fetch-summary {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+}
+
+.main-content {
+    padding-top: 10px;
+}
+
+.grid {
+    grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+    gap: 12px;
+}
+
+@media (max-width: 1080px) {
+    .workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .control-grid {
+        grid-template-columns: 1fr 1fr 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .workspace {
+        padding: 10px;
+    }
+
+    .control-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .quick-row .btn {
+        flex: 1 1 45%;
+    }
+}
+
+/* === Decorative Font Accents === */
+.app-title {
+    font-family: 'DotGothic16', 'Trebuchet MS', 'Verdana', sans-serif;
+    letter-spacing: 0.02em;
+}
+
+.window-label,
+.scan-paths-title,
+.fetch-summary-title,
+.detail-section h3,
+.stats-bar .stat,
+.reason-pill,
+.filter-chip {
+    font-family: 'DotGothic16', Consolas, monospace;
+    letter-spacing: 0.04em;
+}
+
+.control-grid select,
+.quick-row .btn,
+.scan-paths-actions .btn {
+    font-family: 'DotGothic16', 'Inter', sans-serif;
+    letter-spacing: 0.03em;
+}
+
+.title-subtext,
+.stats-bar .stat-value {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+}
+
+/* === Bulk Workflow UI === */
+.bulk-bar {
+    margin-bottom: 8px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.bulk-header {
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.bulk-left,
+.bulk-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.bulk-left {
+    margin-right: auto;
+}
+
+.bulk-count {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: 'DotGothic16', Consolas, monospace;
+}
+
+.bulk-actions-panel {
+    border-top: 1px solid var(--border);
+    padding: 8px 10px;
+    background: rgba(0, 0, 0, 0.15);
+}
+
+.bulk-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 6px;
+}
+
+.bulk-feedback {
+    width: 100%;
+    font-size: 12px;
+    padding: 6px 10px;
+    border-top: 1px solid var(--border);
+}
+
+.bulk-ok {
+    color: var(--success);
+}
+
+.bulk-fail {
+    color: var(--accent);
+}
+
+/* (.card-select used to wrap the corner checkbox — now removed; selection lives
+   on .card.selected via the bordered + glowing state above.) */
+
+.maintenance-stats {
+    font-size: 12px;
+    color: var(--text-muted);
+    display: grid;
+    gap: 3px;
+}
+
+.maintenance-stats strong {
+    color: var(--text-bright);
+}
+
+.maintenance-list {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.maintenance-list-title {
+    width: 100%;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: 'DotGothic16', Consolas, monospace;
+}
+
+.maintenance-pill {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.maintenance-ok {
+    margin-top: 6px;
+    color: var(--success);
+    font-size: 12px;
+}
+
+.maintenance-fail {
+    margin-top: 6px;
+    color: var(--accent);
+    font-size: 12px;
+}
+
+.ops-errors {
+    margin-top: 8px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ops-jobs {
+    margin-top: 8px;
+    display: grid;
+    gap: 4px;
+}
+
+.ops-job-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 6px;
+    background: var(--bg-input);
+}
+
+.ops-job-type {
+    color: var(--text-bright);
+}
+
+.ops-job-status {
+    color: var(--accent-hover);
+    text-transform: lowercase;
+}
+
+.ops-job-id {
+    font-family: Consolas, monospace;
+}
+
+.tab-strip {
+    padding: 8px;
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0; /* Prevent tab strip from shrinking */
+}
+
+.tab-btn {
+    min-width: 110px;
+}
+
+.tab-btn.active {
+    background: var(--accent-dim);
+    border-color: var(--accent);
+    color: var(--accent-hover);
+}
+
+/* === Library subtab strip (Drama CDs / Games / Tokutens) ===
+   Slimmer than the top-level .tab-strip; sits inside the Library template
+   above the bulk-bar. */
+.library-subtabs {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+}
+.library-subtab-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    border-radius: var(--radius);
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.library-subtab-btn:hover {
+    color: var(--text-bright);
+    background: var(--bg-input);
+}
+.library-subtab-btn.active {
+    color: var(--accent-hover);
+    background: var(--accent-dim);
+    border-color: var(--accent);
+}
+
+/* Game play-status pill — replaces the product_code line on game cards.
+   Uses the existing .card-code slot but pivots styling so the status is
+   the visual hint. */
+.game-status-pill {
+    display: inline-block;
+    text-transform: capitalize;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    background: var(--bg-input);
+    color: var(--text-muted);
+}
+.game-status-pill.play-playing {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.game-status-pill.play-completed {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.game-status-pill.play-dropped {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+.game-status-pill.play-on_hold {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
+/* Flex row that holds the play-status pill + platform pill on game cards. */
+.card-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+}
+.game-platform-pill {
+    /* Inherits .game-status-pill base — neutral muted look. Platform codes
+       like "swi", "win", "psp" are already short; no capitalize so they
+       stay recognizable as VNDB codes. */
+    text-transform: lowercase;
+}
+.game-platform-more {
+    margin-left: 4px;
+    opacity: 0.6;
+    font-size: 9px;
+}
+
+/* List-view of a game card uses a row layout; pills should stay inline
+   without growing. */
+.grid.view-list .card-meta-row {
+    margin-top: 0;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+.pipeline-panel {
+    flex: 1;
+    min-height: 0; /* Critical: prevents flex overflow */
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 10px;
+    padding-right: 6px; /* Space for scrollbar */
+}
+
+.pipeline-meta {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.pipeline-controls {
+    display: grid;
+    grid-template-columns: auto 140px auto;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.pipeline-controls input {
+    padding: 6px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+}
+
+.pipeline-note {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.pipeline-list {
+    display: grid;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.pipeline-track-row {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    font-size: 12px;
+}
+
+.pipeline-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+
+.pipeline-col {
+    display: grid;
+    gap: 8px;
+    align-content: start;
+}
+
+.pipeline-run-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    font-size: 12px;
+}
+
+.pipeline-run-card {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pipeline-run-card:hover {
+    background: var(--bg-hover);
+}
+.pipeline-run-card.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.pipeline-run-card-main {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+.pipeline-run-card-id {
+    font-weight: 600;
+    color: var(--text);
+}
+.pipeline-run-card-meta {
+    color: var(--text-muted);
+}
+.pipeline-run-card-actions {
+    display: inline-flex;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.icon-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.icon-btn-danger:hover:not(:disabled) {
+    color: #ff6464;
+    border-color: color-mix(in srgb, #ff6464 55%, var(--border));
+}
+.icon-btn-confirm {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.icon-btn-confirm:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+}
+
+.pipeline-run-card-time {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: help;
+}
+
+.clean-source-block {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.clean-source-toolbar {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* ===== Workshop top search + compact item card ===== */
+/* Persistent autocomplete bar at the top of Workshop. Drops a list of up to
+   10 drama-CD matches; click one to load it into Workshop. */
+.workshop-search {
+    position: relative;
+    margin-bottom: 10px;
+}
+.workshop-search-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+.workshop-search-icon {
+    position: absolute;
+    left: 10px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+.workshop-search-input {
+    width: 100%;
+    padding: 8px 10px 8px 30px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 13px;
+}
+.workshop-search-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.workshop-search-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    max-height: 360px;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+.workshop-search-empty {
+    padding: 10px 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.workshop-search-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 10px;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    text-align: left;
+    color: var(--text);
+}
+.workshop-search-result:last-child {
+    border-bottom: none;
+}
+.workshop-search-result:hover {
+    background: var(--bg-hover);
+}
+.workshop-search-result-cover {
+    width: 36px;
+    height: 36px;
+    object-fit: cover;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.workshop-search-result-cover-blank {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+}
+.workshop-search-result-meta {
+    flex: 1;
+    min-width: 0;
+}
+.workshop-search-result-title {
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.workshop-search-result-sub {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+
+/* Compact item card — cover on the left, vertically stacked metadata on the
+   right (title, circle, VA, code, tracks). Each metadata row is a bare div
+   with plain muted text. */
+.workshop-cd {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 12px 16px;
+    margin-bottom: 12px;
+    cursor: default;
+}
+.workshop-cd-cover {
+    width: 128px;
+    height: 128px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.workshop-cd-cover-blank {
+    background: var(--bg);
+}
+.workshop-cd-body {
+    flex: 1;
+    min-width: 0;
+    max-width: 520px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    cursor: default;
+}
+.workshop-cd-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+    margin-bottom: 3px;
+    max-width: 100%;
+}
+.workshop-meta-label {
+    color: var(--text-muted);
+    opacity: 0.7;
+    margin-right: 2px;
+}
+/* One row per metadata field — circle, VA, code, track count each on
+   their own line. Plain text, muted color. The defensive resets (border,
+   background, padding, box-shadow, outline) are belt-and-suspenders against
+   any stray inherited rule mistaking these divs for inputs. */
+.workshop-meta-row {
+    font-size: 12.5px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: default;
+    /* Fixed-height flex row so toggling between display and edit modes (text
+       ↔ input + ✓/✗ buttons) doesn't change the row height and shift the
+       rest of the page. */
+    display: flex;
+    align-items: center;
+    min-height: 22px;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+    outline: none;
+}
+.workshop-cd-code {
+    font-family: var(--font-mono, monospace);
+    font-size: 11.5px;
+}
+.workshop-cd-edit {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    margin-left: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    vertical-align: middle;
+}
+.workshop-cd-edit:hover {
+    color: var(--accent);
+}
+.workshop-cd-track-input {
+    width: 60px;
+    padding: 1px 6px;
+    margin-left: 4px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+}
+
+/* Yeet the native number-input spinner arrows app-wide — they look like raw
+   Windows widgets and clash with everything else. Affects Chromium/Edge via
+   the spin-button pseudos and Firefox via appearance: textfield. */
+input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.workshop-empty-hint {
+    padding: 14px 12px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-bottom: 12px;
+}
+
+/* Action icons rendered inline in a panel's card-header — used by the
+   Archive panel (extract / force re-extract toggle / open folder / export
+   kebab). The card-toggle (▼) still lives at the very right; this row sits
+   between the title and the toggle. */
+.card-header-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    margin-right: 10px;
+}
+.card-header-actions .icon-btn {
+    width: 26px;
+    height: 26px;
+}
+/* Toggle-on state for action icons that double as boolean toggles
+   (force re-extract). Accent-tinted background + border + icon so it
+   reads as "active" without taking extra space. */
+.icon-btn-toggle-on {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    color: var(--accent);
+}
+.icon-btn-toggle-on:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent);
+}
+
+/* Archive panel export kebab dropdown — three hardcoded presets. */
+.archive-export-menu {
+    position: relative;
+    display: inline-flex;
+}
+.archive-export-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 60;
+    min-width: 260px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+}
+.archive-export-heading {
+    padding: 8px 12px 4px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+.archive-export-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-top: 1px solid var(--border);
+    cursor: pointer;
+    color: var(--text);
+}
+.archive-export-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+.archive-export-item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.archive-export-item-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+.archive-export-item-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* Archive panel inline file viewer — read-only flat list of paths + sizes
+   pulled from `7z l`. Scrollable, cached per item on the frontend. */
+.archive-viewer {
+    margin-top: 4px;
+}
+.archive-viewer-summary {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.archive-viewer-list {
+    width: 100%;
+    max-height: 280px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+}
+/* Grid layout instead of flex: ``minmax(0, 1fr)`` on the path column lets
+   it shrink below its intrinsic content size so the row truncates cleanly
+   on long unbreakable filenames (e.g. Japanese paths without spaces). */
+.archive-viewer-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 10px;
+    font-size: 11.5px;
+    font-family: var(--font-mono, monospace);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 35%, transparent);
+}
+.archive-viewer-row:last-child {
+    border-bottom: none;
+}
+.archive-viewer-row:hover {
+    background: var(--bg-hover);
+}
+.archive-viewer-path {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+/* Folder header above each group in the list view — clickable button that
+   toggles collapse on the files below it. Shows only the leaf folder name
+   (full path in the tooltip) so deeply-nested CDs don't waste a row on the
+   parent prefix. */
+.archive-viewer-folder-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--bg) 60%, var(--bg-input));
+    border: none;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    cursor: pointer;
+    text-align: left;
+}
+.archive-viewer-folder-header:first-child {
+    border-top: none;
+}
+.archive-viewer-folder-header:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+.archive-folder-chevron {
+    flex-shrink: 0;
+    transition: transform 0.12s ease;
+}
+.archive-viewer-folder-header.collapsed .archive-folder-chevron {
+    transform: rotate(-90deg);
+}
+.archive-folder-leaf {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+}
+.archive-folder-count {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--border) 50%, transparent);
+    padding: 1px 6px;
+    border-radius: 8px;
+}
+.archive-viewer-row.archive-viewer-row-indent {
+    padding-left: 26px;
+}
+.archive-viewer-size {
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Visual divider between the view-toggle icons and the action icons in
+   the Archive header. */
+.archive-header-divider {
+    display: inline-block;
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+    align-self: center;
+}
+
+/* Grid view — folder navigation with breadcrumbs at top and a CSS grid of
+   tiles below. Image files render as thumbnails (lazy-loaded), other files
+   show a generic file icon. */
+.archive-viewer-grid-wrap {
+    margin-top: 4px;
+}
+.archive-breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px 4px 0 0;
+    border-bottom: none;
+    font-size: 11.5px;
+    font-family: var(--font-mono, monospace);
+    min-width: 0;
+}
+.archive-breadcrumb-btn {
+    padding: 2px 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 3px;
+    max-width: 200px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.archive-breadcrumb-btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+.archive-breadcrumb-sep {
+    color: var(--border);
+    user-select: none;
+}
+.archive-viewer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+    gap: 8px;
+    padding: 10px;
+    max-height: 420px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 0 0 4px 4px;
+    background: var(--bg-input);
+}
+.archive-grid-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 6px;
+    background: var(--bg);
+    border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+    border-radius: 4px;
+    text-align: center;
+    cursor: default;
+}
+.archive-grid-tile-folder {
+    cursor: pointer;
+}
+.archive-grid-tile-folder:hover {
+    background: var(--bg-hover);
+    border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.archive-grid-tile-folder .archive-grid-thumb {
+    color: var(--accent);
+}
+.archive-grid-thumb {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--bg-input) 60%, var(--bg));
+    border-radius: 3px;
+    overflow: hidden;
+    color: var(--text-muted);
+}
+.archive-grid-thumb-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.archive-grid-name {
+    width: 100%;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.archive-grid-sub {
+    width: 100%;
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pipeline-run-card.selected .pipeline-run-card-time {
+    color: var(--text);
+}
+
+.pipeline-json {
+    width: 100%;
+    min-height: 100px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    color: var(--text);
+    font-family: Consolas, monospace;
+    font-size: 11px;
+    resize: vertical;
+}
+
+.pipeline-segment-row {
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
+.pipeline-viewer {
+    margin-top: 12px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 12px;
+}
+
+.pipeline-viewer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.pipeline-viewer-header h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.pipeline-segment-viewer {
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-input);
+    padding: 8px;
+}
+
+.segment-item {
+    margin-bottom: 8px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+}
+
+.segment-item:last-child {
+    margin-bottom: 0;
+}
+
+.segment-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-family: Consolas, monospace;
+    margin-bottom: 4px;
+}
+
+.segment-text {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+/* Collapsible Card Sections */
+.card-section {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s ease;
+}
+
+.card-header:hover {
+    background: var(--bg-hover);
+}
+
+.card-title {
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.card-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--text-muted);
+    transition: transform 0.2s ease;
+    font-size: 12px;
+}
+
+.card-toggle.collapsed {
+    transform: rotate(-90deg);
+}
+
+.card-content {
+    /* Animate to ACTUAL content height via the modern interpolate-size keyword
+       (Chrome 129+, Edge 129+, Firefox 138+). No more dead-pixel sweep through
+       a giant max-height. Falls back to instant snap on older browsers. */
+    interpolate-size: allow-keywords;
+    padding: 16px;
+    height: auto;
+    min-width: 0;
+    overflow: hidden;
+    transition: height 0.18s ease-out, opacity 0.15s ease-out, padding 0.18s ease-out;
+    opacity: 1;
+}
+
+.card-content.collapsed {
+    height: 0;
+    padding: 0 16px;
+    opacity: 0;
+}
+
+.card-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+@media (max-width: 1200px) {
+    .card-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Mini Stats Cards */
+.stat-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+}
+
+.stat-card-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+}
+
+.stat-card-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+/* Run Item Cards */
+.run-card {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    display: grid;
+    gap: 8px;
+}
+
+.run-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.run-card-info {
+    font-size: 12px;
+}
+
+.run-card-id {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.run-card-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.run-card-actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.run-card-actions .btn {
+    padding: 4px 8px;
+    font-size: 10px;
+}
+
+@media (max-width: 960px) {
+    .pipeline-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .pipeline-controls {
+        grid-template-columns: 1fr;
+    }
+
+    .card-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Sidebar Collapsible Sections */
+.collapsible-section {
+    overflow: hidden;
+}
+
+.section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    margin-bottom: 8px;
+    transition: background 0.2s ease;
+    padding: 4px;
+    margin: -4px;
+    border-radius: 6px;
+}
+
+.section-header:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.section-content {
+    /* Animate to ACTUAL content height (interpolate-size keyword). No more
+       max-height: 6000px and the dead-pixel lag that came with it. */
+    interpolate-size: allow-keywords;
+    height: auto;
+    overflow: hidden;
+    transition: height 0.18s ease-out, opacity 0.15s ease-out, margin-top 0.18s ease-out;
+    opacity: 1;
+    margin-top: 0;
+}
+
+.section-content.collapsed {
+    height: 0;
+    opacity: 0;
+    margin-top: -8px;
+}
+
+/* === Workshop Toggle Section === */
+.workshop-toggle-section {
+    border-left: 3px solid transparent;
+    transition: border-color 0.3s ease;
+}
+
+.workshop-toggle-section:has(.workshop-status-indicator.active) {
+    border-left-color: var(--success);
+}
+
+.workshop-status-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.workshop-status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(42, 36, 48, 0.45);
+    border: 1px solid var(--border);
+    transition: all 0.3s ease;
+}
+
+.workshop-status-indicator.active {
+    background: rgba(46, 213, 115, 0.12);
+    border-color: var(--success);
+}
+
+.workshop-icon {
+    font-size: 16px;
+    opacity: 0.6;
+    transition: opacity 0.3s ease;
+}
+
+.workshop-status-indicator.active .workshop-icon {
+    opacity: 1;
+    filter: grayscale(0%);
+}
+
+.workshop-status-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    transition: color 0.3s ease;
+}
+
+.workshop-status-indicator.active .workshop-status-text {
+    color: var(--success);
+}
+
+.workshop-help-text {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: rgba(255, 165, 2, 0.08);
+    border-left: 2px solid var(--warning);
+    border-radius: 3px;
+}
+
+.btn-sm {
+    padding: 4px 12px;
+    font-size: 11px;
+    min-width: 70px;
+}
+
+/* Compact icon-only button — Lucide-style inline SVG, no chrome,
+   muted by default, accent on hover. Use for inline list controls. */
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.icon-btn:active {
+    transform: translateY(1px);
+}
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    color: var(--text-muted);
+    background: transparent;
+    border-color: transparent;
+}
+.icon-btn svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* Inline action row: icon buttons + divider + compact language picker */
+.track-actions-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.track-actions-divider {
+    width: 1px;
+    height: 18px;
+    background: var(--border);
+    margin: 0 4px;
+}
+.track-actions-lang {
+    height: 26px;
+    padding: 0 6px;
+    font-size: 12px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.track-actions-lang:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.track-actions-lang:focus {
+    outline: none;
+    color: var(--text);
+    border-color: var(--accent);
+}
+.track-actions-lang:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Hover/focus-revealed action menu — used for less-frequent bulk actions
+   like "Translate metadata" so they aren't permanent UI clutter. */
+.hover-menu {
+    position: relative;
+    display: inline-flex;
+}
+
+.hover-menu-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 200px;
+    padding: 4px;
+    /* `--bg-card` is intentionally translucent in some themes; for a floating
+       popover we need an opaque surface so content behind doesn't bleed through.
+       `--bg` is solid in every theme. */
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    z-index: 50;
+    opacity: 0;
+    transform: translateY(-4px);
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+/* Click-toggled (Vue manages `.open`); the trigger button toggles state and
+   a document-level click listener closes it on outside click. */
+.hover-menu.open > .hover-menu-panel {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.icon-btn.active {
+    background: var(--bg-hover);
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.hover-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.hover-menu-item:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--accent);
+}
+.hover-menu-item:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.hover-menu-item svg {
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+.hover-menu-item:hover:not(:disabled) svg {
+    color: var(--accent);
+}
+
+/* Split-button row in the add-new menu: `[main label] | [bulk-pick icon]`.
+   The main button stays full-width on its left; the trailing icon button
+   gets a fixed size and a faint divider. Both halves still get the
+   independent hover state from .hover-menu-item / .hover-menu-bulk. */
+.hover-menu-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+}
+.hover-menu-row > .hover-menu-item {
+    flex: 1 1 auto;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+.hover-menu-row-sep {
+    flex: 0 0 1px;
+    align-self: center;
+    height: 18px;
+    background: var(--border);
+    opacity: 0.6;
+}
+.hover-menu-bulk {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+.hover-menu-bulk:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--accent);
+}
+.hover-menu-bulk:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Pipeline action shortcuts inside the bulk-actions menu — a compact row of
+   four icons (extract / transcribe / translate / full workflow) instead of
+   four full-width text items. Sits below the text-labeled items and inherits
+   the menu's border styling for a clean divider. */
+.hover-menu-icon-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2px;
+    padding: 4px;
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+}
+.hover-menu-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 32px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.hover-menu-icon-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.hover-menu-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Readonly inputs (auto-filled from Library selection) */
+input[readonly] {
+    background: rgba(74, 158, 255, 0.1) !important;
+    border-color: #4a9eff !important;
+    cursor: not-allowed;
+    color: var(--text-muted);
+}
+
+/* === Custom-styled checkboxes & radios ============================
+   Pure CSS replacement for the OS-default form controls. `appearance: none`
+   strips the native rendering; we paint the box and the check/dot ourselves
+   so they match the rest of the dark/pink aesthetic. Size matches the
+   default 16x16 native control so existing layouts don't shift. */
+input[type="checkbox"],
+input[type="radio"] {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-input);
+    border: 1.5px solid var(--border);
+    cursor: pointer;
+    vertical-align: middle;
+    position: relative;
+    transition: background 0.12s ease, border-color 0.12s ease, box-shadow 0.15s ease;
+}
+
+input[type="checkbox"] {
+    border-radius: 4px;
+}
+
+input[type="radio"] {
+    border-radius: 50%;
+}
+
+/* Hover: subtle accent on the border */
+input[type="checkbox"]:hover:not(:disabled),
+input[type="radio"]:hover:not(:disabled) {
+    border-color: var(--accent);
+}
+
+/* Focus ring (keyboard a11y) */
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+    border-color: var(--accent);
+}
+
+/* Checked: pink border + small white square (checkbox) or dot (radio) at center.
+   Pure CSS via ::after pseudo-element. No images, no data URIs, no glyph fonts. */
+input[type="checkbox"]:checked,
+input[type="radio"]:checked {
+    background-color: var(--accent);
+    border-color: var(--accent);
+}
+
+input[type="checkbox"]:checked::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: #ffffff;
+    border-radius: 1px;
+}
+
+input[type="radio"]:checked::after {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #ffffff;
+}
+
+/* Disabled */
+input[type="checkbox"]:disabled,
+input[type="radio"]:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Track selection list hover states */
+/* Track-pick row & transcript-run row: borderless. Selection conveyed
+   purely via background tint. Cleaner, no boxes-within-boxes feel. */
+.track-pick-row {
+    display: flex;
+    align-items: flex-start;
+    margin: 2px 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    background: transparent;
+    gap: 8px;
+    transition: background 0.15s ease;
+    user-select: none;
+}
+
+.track-pick-row:hover {
+    background: var(--bg-hover);
+}
+
+.track-pick-row.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+/* Codec pills inside a grouped track row. Preferred codec (the one that will
+   be fed to whisper) gets the accent border; the rest are muted. */
+.codec-pill-cluster {
+    display: inline-flex;
+    gap: 4px;
+}
+.codec-pill {
+    display: inline-block;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 10px;
+    font-family: 'DotGothic16', Consolas, monospace;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    background: var(--bg-input);
+}
+.codec-pill.preferred {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* Variant pills (SFX / no-SFX) live next to codec pills but want a hair of
+   distinction so the two columns of metadata don't blur together. Italic
+   keeps them visually separable without being loud. */
+.codec-pill.variant-pill {
+    font-style: italic;
+    letter-spacing: 0.06em;
+}
+
+/* Clickable picker pills inside the player header — switch the active codec
+   or variant during playback. Larger hit target, button reset, hover state. */
+.codec-pill.picker-pill {
+    cursor: pointer;
+    background: var(--bg-input);
+    color: var(--text-muted);
+    font-family: 'DotGothic16', Consolas, monospace;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.codec-pill.picker-pill:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.codec-pill.picker-pill.preferred {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--accent);
+    border-color: var(--accent);
+}
+
+/* Header row containing the codec/variant picker clusters under the title. */
+.player-stage-pickers {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: center;
+    margin-top: 4px;
+}
+.player-stage-picker-row {
+    display: inline-flex;
+    gap: 4px;
+}
+
+.pipeline-track-row:hover {
+    background: var(--bg-hover) !important;
+}
+
+.pipeline-track-row.selected {
+    background: color-mix(in srgb, var(--accent) 12%, transparent) !important;
+}
+
+/* Workshop track-row meta line: emoji-free, lucide icons inline, presence-
+   only indicators for transcript/translation (count is meaningless when
+   sibling tracks share runs). */
+.track-row-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    margin-top: 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.track-meta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-muted);
+}
+.track-meta-pill svg {
+    flex-shrink: 0;
+}
+.track-meta-status {
+    color: var(--border);
+    transition: color 0.15s ease;
+}
+.track-meta-status.active {
+    color: var(--accent);
+}
+.track-row-play {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Seiyuu / CV name dedup list (Settings → Seiyuu / CV names). Compact list
+   with a checkbox per row, name, use count, and current canonical mapping. */
+.seiyuu-list {
+    margin-top: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+}
+.seiyuu-row {
+    display: grid;
+    grid-template-columns: 18px 1fr auto auto;
+    gap: 4px 8px;
+    align-items: baseline;
+    padding: 4px 10px;
+    border-bottom: 1px dashed var(--border);
+    font-size: 12px;
+    cursor: pointer;
+}
+.seiyuu-jp {
+    grid-column: 2 / 3;
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: -2px;
+}
+.seiyuu-row:last-child { border-bottom: none; }
+.seiyuu-row:hover { background: var(--bg-hover); }
+.seiyuu-name { color: var(--text-bright); }
+.seiyuu-uses {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+}
+.seiyuu-canonical {
+    color: var(--accent);
+    font-size: 11px;
+    grid-column: 2 / -1;
+    margin-left: 0;
+}
+.seiyuu-merge-bar {
+    margin-top: 10px;
+    padding: 10px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.seiyuu-merge-bar select {
+    width: 100%;
+    margin-top: 4px;
+}
+.seiyuu-preview {
+    margin-top: 12px;
+}
+.seiyuu-preview-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+    font-size: 11px;
+}
+.seiyuu-preview-row {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 8px;
+    padding: 4px 10px;
+    border-bottom: 1px dashed var(--border);
+}
+.seiyuu-preview-row:last-child { border-bottom: none; }
+.seiyuu-preview-code {
+    color: var(--text-bright);
+    font-family: 'DotGothic16', Consolas, monospace;
+}
+.seiyuu-preview-title {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.seiyuu-preview-diff {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.seiyuu-preview-before { color: #ff5470; }
+.seiyuu-preview-after { color: var(--success); }
+
+.seiyuu-suggest-block { margin-top: 8px; }
+.seiyuu-suggest-list {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.seiyuu-suggest-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px dashed var(--border);
+}
+.seiyuu-suggest-row:last-child { border-bottom: none; }
+.seiyuu-suggest-row.jp-mismatch {
+    background: color-mix(in srgb, var(--star) 10%, transparent);
+}
+.seiyuu-suggest-body { flex: 1; min-width: 0; }
+.seiyuu-suggest-names {
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.4;
+}
+.seiyuu-suggest-name { display: inline; }
+.seiyuu-suggest-count {
+    color: var(--text-muted);
+    font-size: 10px;
+    margin-left: 2px;
+}
+.seiyuu-suggest-jp {
+    margin-top: 2px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.seiyuu-suggest-jp-label {
+    color: var(--accent);
+    margin-right: 4px;
+    font-weight: 600;
+}
+.seiyuu-jp-warning {
+    color: var(--star);
+    font-size: 10px;
+    margin-left: 8px;
+}
+
+/* JP-name confirmation block in the merge bar — shown right above the
+   canonical-name dropdown. Lets the user verify they're actually merging
+   the same person and not collapsing two distinct CVs into one. */
+.seiyuu-confirm-block {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+}
+.seiyuu-confirm-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 11px;
+    border-bottom: 1px dashed var(--border);
+}
+.seiyuu-confirm-row:last-child { border-bottom: none; }
+.seiyuu-confirm-en { color: var(--text-bright); }
+.seiyuu-confirm-jp { color: var(--text-muted); }
+
+/* Stat pills become subtly clickable when hovered. The hover lift helps
+   communicate that they actually do something (filter the library to the
+   underlying set). */
+.stat.clickable {
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+.stat.clickable:hover {
+    background: var(--bg-hover);
+    color: var(--text-bright);
+}
+
+/* Unmatched-files modal — opened from the Unmatched stat pill. */
+.unmatched-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 9200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+.unmatched-modal-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: min(640px, 100%);
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+.unmatched-modal-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.unmatched-modal-title {
+    font-weight: 600;
+    color: var(--text-bright);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 13px;
+}
+.unmatched-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+}
+.unmatched-modal-footer {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.unmatched-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.unmatched-row {
+    padding: 8px 16px;
+    border-bottom: 1px dashed var(--border);
+    font-size: 12px;
+}
+.unmatched-row:last-child { border-bottom: none; }
+.unmatched-name {
+    color: var(--text-bright);
+    word-break: break-all;
+}
+.unmatched-path {
+    color: var(--text-muted);
+    font-size: 10px;
+    font-family: 'DotGothic16', Consolas, monospace;
+    margin-top: 2px;
+    word-break: break-all;
+}
+
+/* Tiny error log under the Ops/Health "Fetch error summary" pills. Kept
+   small + scrollable on purpose — this is a debug peek, not a full panel. */
+.ops-errors-detail {
+    margin-top: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-input);
+    font-size: 11px;
+    font-family: 'DotGothic16', Consolas, monospace;
+}
+.ops-error-row {
+    display: grid;
+    grid-template-columns: 110px 90px 1fr;
+    gap: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px dashed var(--border);
+}
+.ops-error-row:last-child { border-bottom: none; }
+.ops-error-code { color: var(--text-bright); }
+.ops-error-reason { color: var(--accent); }
+.ops-error-msg {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ops-error-more {
+    padding: 4px 8px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+/* Lucide icons sitting inside a card-title or card-header, replacing the
+   emoji glyphs that used to live there. Matches the surrounding text size
+   and inherits the title's color. */
+.card-title-icon {
+    flex-shrink: 0;
+    color: var(--accent);
+}
+.card-title-icon.muted { color: var(--text-muted); }
+
+/* Player track-picker empty state — "extract first" prompt, not an error. */
+.player-empty-state {
+    margin-top: 16px;
+    padding: 24px 20px;
+    text-align: center;
+    color: var(--text);
+    background: var(--bg-input);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+}
+.player-empty-state p {
+    margin: 0 0 6px 0;
+}
+.player-empty-state .player-empty-hint {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* ====== PLAYER STYLES (rebuilt) ====== */
+
+/*
+ * Architecture:
+ *   .player-container  — the ONE scroll container (overflow-y: auto)
+ *     .player-header   — sticky inside .player-container
+ *     .player-info     — track title + duration
+ *     .player-progress-container
+ *     .player-controls
+ *     .transcript-section
+ *       .transcript-list
+ *         .transcript-card (repeating)
+ *     .jump-to-current (position: sticky at bottom)
+ *
+ * No overflow on any ancestor of .player-container.
+ * No separate mobile modal — same DOM for both breakpoints, CSS adapts.
+ */
+
+.player-container {
+    flex: 1;
+    overflow: hidden; /* Prevent overflow from escaping to body scroll */
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    height: 100%;
+}
+
+/* Scroll wrapper (NOT flex) — THE ONLY scroll container, allows sticky to work properly */
+.player-scroll-wrapper {
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex: 1;
+    scroll-behavior: smooth;
+    display: block; /* NOT flex — allows sticky to work on children */
+    min-height: 0;
+    height: 100%; /* Fill available space */
+}
+
+.player-sticky-block {
+    position: sticky;
+    top: 56px; /* Adjust this to match your .player-header height */
+    z-index: 20;
+    background: var(--bg);
+    padding-bottom: 12px;
+}
+
+/* Mobile override */
+    @media (max-width: 768px) {
+    .player-sticky-block {
+        top: 48px; /* adjust to match mobile header height */
+            }
+    }
+/* --- Sticky Header --- */
+.player-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    /* NOT a flex child — .player-scroll-wrapper is block, not flex */
+}
+
+.player-close-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s ease;
+}
+
+.player-close-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+    border-color: rgba(255,255,255,0.1);
+}
+
+.player-header-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+
+.player-header-spacer {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+}
+
+.player-header-jump {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    color: var(--bg);
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 0 12px var(--accent);
+    transition: all 0.2s ease;
+    animation: slideUpFade 0.3s ease;
+}
+
+.player-header-jump:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 18px var(--accent);
+}
+
+/* --- Track Info --- */
+.player-info {
+    text-align: center;
+    padding: 20px 20px 0;
+    max-width: 780px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+.player-track-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+
+.player-track-meta {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-family: "SF Mono", "Consolas", monospace;
+    letter-spacing: 0.5px;
+    margin-bottom: 20px;
+}
+
+/* --- Progress Bar --- */
+.player-progress-container {
+    max-width: 780px;
+    width: 100%;
+    margin: 0 auto 20px;
+    padding: 0 20px;
+    cursor: pointer;
+}
+
+.player-progress-track {
+    height: 6px;
+    background: var(--bg-card);
+    border-radius: 3px;
+    position: relative;
+    cursor: pointer;
+    margin-bottom: 8px;
+}
+
+.player-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    position: relative;
+    transition: width 0.1s linear;
+    box-shadow: 0 0 8px var(--accent);
+}
+
+.player-progress-time {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: "SF Mono", "Consolas", monospace;
+}
+
+/* --- Playback Controls --- */
+.player-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 20px;
+    padding: 0 20px 20px;
+}
+
+.control-btn {
+    width: 56px;
+    height: 56px;
+    border-radius: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    font-size: 20px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.control-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: rgba(255,255,255,0.1);
+    transform: translateY(-2px);
+}
+
+.control-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.control-btn.play {
+    width: 72px;
+    height: 72px;
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg);
+    font-size: 28px;
+    box-shadow: 0 0 18px var(--accent);
+}
+
+.control-btn.play:hover:not(:disabled) {
+    transform: scale(1.05);
+    box-shadow: 0 0 24px var(--accent);
+}
+
+/* --- Transcript --- */
+.transcript-section {
+    max-width: 900px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 0 20px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+}
+
+.transcript-header {
+    text-align: center;
+    margin-bottom: 18px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-family: 'Press Start 2P', monospace;
+}
+
+.player-empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+}
+
+.player-empty-state h3 {
+    color: var(--text);
+    margin-bottom: 12px;
+    font-size: 18px;
+}
+
+.player-empty-state p {
+    font-size: 14px;
+    line-height: 1.6;
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.transcript-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-bottom: 50vh; /* breathing room to scroll last segment to center */
+}
+
+.transcript-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 18px 22px;
+    display: flex;
+    gap: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    line-height: 1.6;
+    min-height: 60px;
+}
+
+.transcript-card:hover {
+    background: var(--bg-hover);
+    border-color: rgba(255,255,255,0.08);
+}
+
+.transcript-card.active {
+    background: var(--bg-card);
+    border-color: var(--accent);
+    box-shadow: 0 0 20px var(--accent), 0 0 40px rgba(var(--accent-rgb), 0.3);
+    will-change: box-shadow;
+}
+
+.ts-time {
+    flex-shrink: 0;
+    width: 48px;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: "SF Mono", "Consolas", monospace;
+    padding-top: 2px;
+}
+
+.transcript-card.active .ts-time {
+    color: var(--accent);
+}
+
+.ts-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.ts-jp {
+    font-size: 16px;
+    color: var(--text-bright);
+    line-height: 1.6;
+    margin-bottom: 6px;
+    font-weight: 500;
+}
+
+.transcript-card.active .ts-jp {
+    color: var(--text-bright);
+}
+
+.ts-en {
+    font-size: 14px;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+.transcript-card.active .ts-en {
+    color: var(--text);
+}
+
+/* --- Jump to Current (floating pill) --- */
+.jump-to-current {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 24px;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 24px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 0 18px var(--accent);
+    z-index: 100;
+    animation: slideUpFade 0.3s ease;
+    transition: all 0.2s ease;
+}
+
+.jump-to-current:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 24px var(--accent);
+}
+
+@keyframes slideUpFade {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Track Selection (shared desktop/mobile) --- */
+.player-selected-item-info {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.player-item-header {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.player-item-cover {
+    width: 80px;
+    height: 80px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.player-item-details {
+    flex: 1;
+    min-width: 0;
+}
+
+.player-item-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.player-item-secondary-title {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.player-item-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.player-track-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.player-track-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.player-track-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+}
+
+.player-track-main {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+}
+
+.player-track-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.player-track-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-bright);
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-track-stats {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.player-track-play-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    padding: 0;
+    border-radius: 50%;
+}
+
+/* ============================================================== */
+/* === LYRIC STAGE PLAYER (Spotify-style) =====================
+ *
+ * Three vertical zones:
+ *   .player-stage-top      — small title bar at top (back + title)
+ *   .player-stage-lyrics   — centered scroll area (the only scroll container)
+ *   .player-stage-bottom   — slim controls bar pinned to the bottom
+ *
+ * The active line is the "now-playing": larger and brighter; siblings
+ * fade with distance. Scroll-snap keeps the active line near viewport
+ * center via scrollActiveTranscriptIntoView().
+ * ============================================================== */
+
+.player-stage {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+}
+
+.player-stage-top {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    z-index: 5;
+}
+
+.player-stage-back,
+.player-stage-resume {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    color: var(--text-bright);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+.player-stage-back:hover,
+.player-stage-resume:hover {
+    background: var(--bg-hover);
+}
+.player-stage-resume {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    animation: stage-resume-pulse 2s ease-in-out infinite;
+}
+@keyframes stage-resume-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(232, 72, 106, 0.4); }
+    50%      { box-shadow: 0 0 0 8px rgba(232, 72, 106, 0); }
+}
+
+.player-stage-spacer { width: 36px; height: 36px; flex-shrink: 0; }
+
+.player-stage-headline {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+}
+.player-stage-track {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.player-stage-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    font-family: "SF Mono", "Consolas", monospace;
+}
+
+/* --- Lyrics stage (the only scroll container) --- */
+.player-stage-lyrics {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scroll-behavior: smooth;
+    padding: 0 24px;
+}
+
+.player-stage-list {
+    max-width: 760px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top/bottom blank zones so the first/last line can scroll to viewport center */
+.player-stage-spacer-block { height: 40vh; }
+
+.player-stage-line {
+    padding: 14px 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: opacity 0.25s ease, transform 0.25s ease, color 0.25s ease;
+    line-height: 1.45;
+    user-select: none;
+    border-radius: 12px;
+}
+.player-stage-line:hover { background: rgba(255,255,255,0.03); }
+
+.player-stage-line-jp {
+    font-size: 16px;
+    color: var(--text-bright);
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+.player-stage-line-en {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    font-style: italic;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+
+/* Distance-based fade. Active is the focal point. */
+.player-stage-line.active .player-stage-line-jp {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--accent);
+    text-shadow: 0 0 24px rgba(232, 72, 106, 0.45);
+}
+.player-stage-line.active .player-stage-line-en {
+    font-size: 16px;
+    color: var(--text-bright);
+    font-style: normal;
+    margin-top: 8px;
+}
+.player-stage-line.near    { opacity: 0.65; }
+.player-stage-line.far     { opacity: 0.4; }
+.player-stage-line.distant { opacity: 0.22; }
+.player-stage-line.active  { opacity: 1; }
+
+/* --- Bottom controls bar --- */
+.player-stage-bottom {
+    flex-shrink: 0;
+    padding: 14px 20px 18px;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.player-stage-progress {
+    cursor: pointer;
+    max-width: 760px;
+    width: 100%;
+    margin: 0 auto;
+}
+.player-stage-progress-track {
+    height: 4px;
+    background: var(--bg-card);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+    transition: height 0.15s ease;
+}
+.player-stage-progress:hover .player-stage-progress-track { height: 6px; }
+.player-stage-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.1s linear;
+    box-shadow: 0 0 8px rgba(232, 72, 106, 0.6);
+}
+.player-stage-times {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: "SF Mono", "Consolas", monospace;
+    margin-top: 6px;
+}
+
+.player-stage-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 18px;
+}
+.player-stage-ctl {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+.player-stage-ctl:hover:not(:disabled) {
+    background: var(--bg-hover);
+    transform: translateY(-1px);
+}
+.player-stage-ctl:disabled { opacity: 0.35; cursor: not-allowed; }
+.player-stage-play {
+    width: 56px;
+    height: 56px;
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+    font-size: 20px;
+}
+
+/* Lucide SVGs replace the previous emoji glyphs in the player buttons —
+   consistent rendering across platforms, properly centered. */
+.player-stage-back svg,
+.player-stage-resume svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.player-stage-ctl svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+}
+.player-stage-play svg {
+    width: 22px;
+    height: 22px;
+    /* Slight optical nudge: the play triangle reads visually "off-center"
+       when geometrically centered. 1px right shift fixes it. */
+    margin-left: 1px;
+}
+.player-stage-play svg:first-child {
+    /* Pause icon is symmetric — no nudge. */
+    margin-left: 0;
+}
+
+/* Volume control — pinned to the right of the transport controls. PC-only;
+   hidden on mobile clients via v-if (iOS Safari ignores volume writes and
+   Android has hardware volume buttons). */
+.player-stage-volume {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 12px;
+}
+.player-stage-volume-btn {
+    width: 32px;
+    height: 32px;
+}
+.player-stage-volume-btn svg {
+    width: 16px;
+    height: 16px;
+}
+.player-stage-volume-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 72px;
+    height: 4px;
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
+    border-radius: 2px;
+    cursor: pointer;
+    outline: none;
+    transition: background 0.12s;
+}
+.player-stage-volume-slider:hover {
+    background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.player-stage-volume-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+}
+.player-stage-volume-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+}
+.player-stage-play:hover:not(:disabled) {
+    background: var(--accent);
+    box-shadow: 0 0 18px rgba(232, 72, 106, 0.55);
+}
+
+/* --- Mobile (≤768px) --- */
+@media (max-width: 768px) {
+    .player-stage-top { padding: 8px 12px; }
+    .player-stage-lyrics { padding: 0 14px; }
+    .player-stage-spacer-block { height: 35vh; }
+    .player-stage-line { padding: 12px 4px; }
+    .player-stage-line-jp { font-size: 15px; }
+    .player-stage-line-en { font-size: 12px; }
+    .player-stage-line.active .player-stage-line-jp { font-size: 21px; }
+    .player-stage-line.active .player-stage-line-en { font-size: 14px; }
+    .player-stage-bottom { padding: 12px 14px 16px; gap: 10px; }
+    .player-stage-controls { gap: 14px; }
+    .player-stage-play { width: 52px; height: 52px; }
+    .player-stage-ctl { width: 40px; height: 40px; }
+}
+
+/* --- Mobile (≤768px) --- */
+@media (max-width: 768px) {
+    /* On mobile we stack columns vertically, so the sidebar (control-column)
+       sits on top of whatever tab content is below. When the user is on the
+       Player, the sidebar is just dead weight pushing the player down — its
+       contents (filters/ops/maintenance) aren't relevant for playback.
+       Hide it so the Player gets the full viewport.
+
+       (We also hide the row of tab-buttons inside the library-column duplicates
+       — wait, those live in library-column header itself, leave alone.) */
+    .workspace[data-tab="player"] > .control-column {
+        display: none;
+    }
+    .workspace[data-tab="player"] > .library-column {
+        height: 100vh;
+    }
+
+    .player-container {
+        height: calc(100vh - 100px);
+    }
+
+    .player-header {
+        padding: 8px 16px;
+    }
+
+    .player-close-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 16px;
+    }
+
+    .player-header-title {
+        font-size: 13px;
+    }
+
+    .player-info {
+        padding: 12px 16px 0;
+        text-align: center;
+        margin-left: auto;
+        margin-right: auto;
+    }
+
+    .player-track-title {
+        font-size: 18px;
+        text-align: center;
+    }
+
+    .player-track-meta {
+        text-align: center;
+    }
+
+    .player-track-meta {
+        margin-bottom: 16px;
+    }
+
+    .player-progress-container {
+        padding: 0 16px;
+        margin-bottom: 16px;
+    }
+
+    .player-controls {
+        gap: 16px;
+        padding: 0 16px 16px;
+    }
+
+    .control-btn {
+        width: 52px;
+        height: 52px;
+        font-size: 18px;
+    }
+
+    .control-btn.play {
+        width: 64px;
+        height: 64px;
+        font-size: 24px;
+    }
+
+    .transcript-section {
+        padding: 0 16px;
+    }
+
+    .transcript-header {
+        font-size: 9px;
+    }
+
+    .transcript-card {
+        padding: 16px;
+        gap: 12px;
+        border-radius: 16px;
+        min-height: 56px;
+    }
+
+    .ts-time {
+        width: 44px;
+        font-size: 10px;
+    }
+
+    .ts-jp {
+        font-size: 15px;
+        line-height: 1.7;
+    }
+
+    .ts-en {
+        font-size: 13px;
+        line-height: 1.6;
+    }
+
+    .jump-to-current {
+        bottom: 16px;
+        right: 16px;
+        padding: 10px 20px;
+        font-size: 13px;
+    }
+
+    .player-item-cover {
+        width: 60px;
+        height: 60px;
+    }
+
+    .player-item-title {
+        font-size: 13px;
+    }
+
+    .player-track-name {
+        font-size: 12px;
+    }
+
+    .player-track-stats {
+        font-size: 10px;
+    }
+}
+
+/* --- Touch devices --- */
+@media (hover: none) and (pointer: coarse) {
+    .control-btn {
+        width: 64px;
+        height: 64px;
+        font-size: 24px;
+    }
+
+    .control-btn.play {
+        width: 76px;
+        height: 76px;
+        font-size: 36px;
+    }
+
+    .transcript-card {
+        padding: 18px;
+        min-height: 60px;
+    }
+
+    .ts-jp {
+        font-size: 16px;
+        line-height: 1.8;
+    }
+
+    .ts-en {
+        font-size: 15px;
+        line-height: 1.7;
+    }
+}
+
+/* --- Detail Panel Play Button --- */
+.detail-play-btn {
+    transition: all 0.3s ease;
+    font-weight: 600;
+}
+
+.detail-play-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.detail-play-btn:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.detail-play-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* ============================= */
+/* 📱 Mobile Layout Adjustments  */
+/* ============================= */
+@media (max-width: 768px) {
+
+    html, body {
+        overflow-y: auto !important;
+        height: auto !important;
+    }
+
+    #app {
+        flex-direction: column;
+        height: auto !important;
+    }
+
+    /* SIDEBAR — no scrolling, fixed height */
+    .control-column {
+        width: 100%;
+        overflow: hidden !important;
+        max-height: none;    /* Let it size naturally */
+        flex-shrink: 0;
+    }
+
+    /* LIBRARY INITIAL: fixed height + own scroll */
+    .library-column {
+        overflow-y: auto !important;
+        overflow-x: hidden;
+        height: calc(100vh - 85px); 
+        /* ↑ adjust '200px' depending on sidebar height */
+    }
+
+    /* Ensure main-content doesn’t trap scroll */
+    .main-content {
+        overflow-y: visible !important;
+    }
+}
+
+/* ===== Activity drawer + toasts (autopilot monitor) ===== */
+.tab-strip .activity-toggle {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+}
+.tab-strip .activity-toggle.has-activity {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.tab-strip .activity-toggle .activity-badge {
+    background: var(--accent);
+    color: var(--text-bright);
+    font-size: 10px;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 999px;
+    min-width: 18px;
+    text-align: center;
+    margin-left: 2px;
+}
+
+.activity-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 420px;
+    max-width: 90vw;
+    /* --bg-card is translucent in some themes; fall back to solid --bg so the
+       library content underneath doesn't bleed through. */
+    background: var(--bg);
+    border-left: 1px solid var(--border);
+    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.55);
+    display: flex;
+    flex-direction: column;
+    z-index: 9000;
+}
+.activity-drawer-enter-active,
+.activity-drawer-leave-active {
+    transition: transform 0.22s ease;
+}
+.activity-drawer-enter-from,
+.activity-drawer-leave-to {
+    transform: translateX(100%);
+}
+.activity-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+}
+.activity-drawer-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.activity-drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+.activity-active-pill {
+    background: var(--accent-dim);
+    color: var(--accent);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 500;
+}
+.activity-drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+.activity-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 32px 16px;
+}
+.activity-empty-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 8px;
+}
+.activity-row {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 8px;
+    padding: 10px 12px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 8px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+.activity-row:hover {
+    background: var(--bg-hover);
+}
+.activity-row.expanded {
+    border-color: var(--accent);
+}
+/* No status-tinted border on rows — the status pill text on the right
+   carries the color signal already. */
+.activity-row-main {
+    grid-column: 1;
+    min-width: 0;
+}
+.activity-row-actions {
+    grid-column: 2;
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+}
+.activity-row-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.activity-row-item {
+    color: var(--text-bright);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.activity-row-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+}
+.activity-row.status-running .activity-row-status { color: var(--accent); }
+.activity-row.status-completed .activity-row-status { color: var(--text-muted); }
+.activity-row.status-failed .activity-row-status { color: #ff5470; }
+
+/* Hover-only dismiss × in the top-right corner. Sits above the row's main
+   content so it's not in the same visual axis as the Stop/Resume action
+   buttons (which were misread as confirm/cancel when paired with a check). */
+.activity-row { position: relative; }
+.activity-row-dismiss {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+    z-index: 2;
+}
+.activity-row:hover .activity-row-dismiss { opacity: 1; }
+.activity-row-dismiss:hover {
+    background: var(--bg-hover);
+    color: var(--text-bright);
+}
+.activity-row-stage {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+}
+.activity-row-elapsed {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+}
+.activity-row-progress {
+    height: 3px;
+    background: var(--bg-input);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.activity-row-progress-inner {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.3s ease;
+}
+.activity-row-substage {
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+}
+.activity-row-substage .substage-arrow {
+    color: var(--accent);
+    flex-shrink: 0;
+}
+.activity-row-substage .substage-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Progress bar always uses the theme accent — color changes happen on the
+   status pill text and the row's left border, not the bar. */
+.activity-row-events {
+    grid-column: 1 / -1;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--border);
+    cursor: default;
+}
+.activity-events-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    font-size: 11px;
+}
+.activity-events-list li {
+    padding: 3px 0;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+.activity-events-list .event-time {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+.activity-events-list .event-msg {
+    color: var(--text);
+    word-break: break-word;
+}
+.activity-events-list .event-warn .event-msg { color: var(--star); }
+.activity-events-list .event-error .event-msg { color: #ff5470; }
+
+/* ----- Toasts ----- */
+.toast-stack {
+    position: fixed;
+    bottom: 16px;
+    right: 16px;
+    z-index: 9500;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 360px;
+}
+.toast {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    cursor: pointer;
+    font-size: 12px;
+}
+/* Toasts share the theme accent for the success-style left rim — green
+   doesn't fit themes whose accent is pink/lavender/blue. Failure stays red,
+   warning stays amber so they remain distinguishable at a glance. */
+.toast-ok { border-left-color: var(--accent); }
+.toast-warn { border-left-color: var(--star); }
+.toast-fail { border-left-color: #ff5470; }
+.toast-title {
+    font-weight: 600;
+    color: var(--text-bright);
+    margin-bottom: 2px;
+}
+.toast-body {
+    color: var(--text-muted);
+    word-break: break-word;
+}
+.toast-enter-active,
+.toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.toast-enter-from { opacity: 0; transform: translateX(20px); }
+.toast-leave-to { opacity: 0; transform: translateX(20px); }
+
+/* Per-subtab stat sub-pills (Games play_status / Tokutens kind). Mirrors the
+   main .stats-bar look but tightens the row and uses a slightly muted weight
+   so it reads as "secondary breakdown" instead of competing with the top row. */
+.stats-substack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.stat-sub {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--text);
+    transition: background 0.15s, border-color 0.15s;
+}
+.stat-sub.clickable {
+    cursor: pointer;
+}
+.stat-sub.clickable:hover {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.stat-sub .stat-value {
+    color: var(--accent);
+    font-weight: 600;
+    margin-left: 4px;
+}
+
+/* Unmatched-games cleanup queue overlay (reuses .unmatched-modal* container). */
+.unmatched-queue-card {
+    max-width: 780px;
+    width: 92%;
+}
+.unmatched-queue-body {
+    padding: 0;
+}
+.unmatched-queue-grid {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 0;
+    min-height: 360px;
+}
+.unmatched-queue-left {
+    padding: 16px;
+    border-right: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 3%, transparent);
+}
+.unmatched-queue-cover {
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    border-radius: 8px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--border) 30%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.unmatched-queue-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.unmatched-queue-cover-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.unmatched-queue-info {
+    margin-top: 12px;
+}
+.unmatched-queue-title {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--text);
+    word-break: break-word;
+}
+.unmatched-queue-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    word-break: break-all;
+}
+.unmatched-queue-path {
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 10px;
+}
+.unmatched-queue-right {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.unmatched-queue-search {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated, var(--bg));
+    color: var(--text);
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+.unmatched-queue-results {
+    overflow-y: auto;
+    max-height: 320px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.unmatched-queue-result {
+    display: flex;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.unmatched-queue-result:hover {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.unmatched-queue-result-thumb {
+    width: 42px;
+    height: 56px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+.unmatched-queue-result-meta {
+    flex: 1;
+    min-width: 0;
+}
+.unmatched-queue-result-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.3;
+}
+.unmatched-queue-result-alt {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+.unmatched-queue-result-sub {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+.unmatched-queue-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+}
+.unmatched-queue-msg {
+    flex: 1;
+    font-size: 12px;
+}
+.unmatched-queue-ok { color: var(--accent); }
+.unmatched-queue-err { color: var(--danger, #e74c3c); }
+.unmatched-queue-actions {
+    display: flex;
+    gap: 6px;
+}
+
+/* "No VNDB entry" path — manual edit form inside the right pane. */
+.unmatched-queue-no-vndb {
+    margin-bottom: 10px;
+    width: 100%;
+    font-size: 12px;
+}
+.unmatched-queue-manual {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+    max-height: 360px;
+    padding-right: 4px;
+}
+.unmatched-queue-manual-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding-bottom: 4px;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+.unmatched-queue-manual-header .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 2px 6px;
+}
+.unmatched-queue-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.unmatched-queue-field input,
+.unmatched-queue-field textarea {
+    padding: 5px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated, var(--bg));
+    color: var(--text);
+    font-size: 12px;
+    font-family: inherit;
+    resize: vertical;
+}
+.unmatched-queue-manual-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+
+/* Tokuten ↔ game cross-link pills in detail panels. */
+.linked-link {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+    padding-bottom: 1px;
+    transition: color 0.12s, border-color 0.12s;
+}
+.linked-link:hover {
+    border-bottom-color: var(--accent);
+    color: var(--accent);
+    filter: brightness(1.1);
+}
+.linked-tokuten-list {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: right;
+}
+
+/* Platform icons. The card pill is icon-only (text in tooltip); the detail
+   panel shows icon + label in a chip row. The "available" row is muted to
+   visually distinguish it from the "owned" row. */
+.platform-icon {
+    width: 14px;
+    height: 14px;
+    display: block;
+}
+.card-platform-icons {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+}
+.card-platform-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+    padding: 2px;
+}
+.card-platform-icon span {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    line-height: 1;
+}
+.detail-platform-row {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+}
+.detail-platform-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--text);
+}
+.detail-platform-chip svg {
+    color: var(--accent);
+}
+.detail-platform-chip-muted {
+    background: color-mix(in srgb, var(--text-muted) 12%, transparent);
+    border-color: color-mix(in srgb, var(--text-muted) 22%, transparent);
+    color: var(--text-muted);
+}
+.detail-platform-chip-muted svg {
+    color: var(--text-muted);
+}
+.detail-platform-text {
+    line-height: 1;
+}
+
+/* Ignored game paths list — Settings card. Row = path + 'Un-ignore'. */
+.ignored-paths-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+.ignored-paths-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--text-muted) 8%, transparent);
+}
+.ignored-paths-text {
+    flex: 1;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
+/* Plain fade transition for centered modals — the activity-drawer transition
+   slides off-screen-right which looks wrong on a backdrop+card layout. */
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+    transition: opacity 0.18s ease;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+    opacity: 0;
+}
+
+/* Duplicate-VNDB review modal — reuses .unmatched-modal* skeleton, widens
+   the card a touch and tightens the per-group rows. Launched from the
+   Games stats "Duplicates" pill. */
+.duplicates-modal-card {
+    width: min(760px, 100%);
+}
+.duplicates-modal-body {
+    padding: 12px 16px;
+}
+.duplicates-modal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.duplicates-modal-group {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+.duplicates-modal-group-title {
+    font-weight: 600;
+    color: var(--text-bright);
+    font-size: 13px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+.duplicates-modal-vndb {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+.duplicates-modal-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+}
+.duplicates-modal-row.is-primary {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.duplicates-modal-row + .duplicates-modal-row {
+    margin-top: 4px;
+}
+.duplicates-modal-thumb {
+    flex-shrink: 0;
+    width: 36px;
+    height: 48px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--bg-dim, rgba(255, 255, 255, 0.04));
+    border: 1px solid var(--border);
+}
+.duplicates-modal-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.duplicates-modal-thumb-empty {
+    width: 100%;
+    height: 100%;
+}
+.duplicates-modal-row-meta {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.duplicates-modal-row-tag {
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.duplicates-modal-row.is-primary .duplicates-modal-row-tag {
+    color: var(--accent);
+}
+.duplicates-modal-row-path {
+    color: var(--text);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    word-break: break-all;
+    line-height: 1.35;
+}
+.duplicates-modal-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.duplicates-modal-footer .pipeline-note {
+    flex: 1;
+    min-width: 220px;
+}
+
+/* BBcode rendering inside description-text blocks. */
+.description-text a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.description-text a:hover {
+    border-bottom-color: var(--accent);
+    filter: brightness(1.1);
+}
+.description-text strong { font-weight: 600; }
+.description-text em { font-style: italic; }
+.bbcode-spoiler {
+    background: color-mix(in srgb, var(--text) 22%, transparent);
+    color: transparent;
+    border-radius: 3px;
+    padding: 0 2px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    user-select: none;
+}
+.bbcode-spoiler:hover {
+    background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+.bbcode-spoiler.bbcode-spoiler-revealed {
+    background: transparent;
+    color: inherit;
+    cursor: text;
+    user-select: text;
+}
+
+/* Generic clickable affordance for pills/spans that mutate state on click. */
+.game-status-pill.clickable {
+    cursor: pointer;
+    transition: filter 0.12s, transform 0.12s;
+}
+.game-status-pill.clickable:hover {
+    filter: brightness(1.08);
+}
+
+/* Game play-status quick-dropdown — anchored to the pill it's spawned from.
+   Uses `position: fixed` so the top/left from getBoundingClientRect()
+   (viewport-relative) places it correctly regardless of page scroll, and a
+   z-index above .overlay (200) so it floats above the detail panel modal. */
+.play-status-dropdown {
+    position: fixed;
+    z-index: 9300;
+    background: var(--bg, #18181c);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 4px;
+    min-width: 130px;
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-tint, #000) 35%, transparent);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.play-status-dropdown button {
+    text-align: left;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+.play-status-dropdown button:hover {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.play-status-dropdown button.is-active {
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Card / row selection highlight for shift-click / ctrl-click / drag-select. */
+.card.is-multi-selected,
+.list-row.is-multi-selected {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.drag-rubberband {
+    position: absolute;
+    pointer-events: none;
+    border: 1.5px dashed var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    z-index: 35;
+}

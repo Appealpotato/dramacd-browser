@@ -1,0 +1,352 @@
+import json
+import logging
+import re
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+class ChutesTrackTranslator:
+    def __init__(self, *, api_key: str, model: str):
+        self.api_key = api_key
+        self.model = model
+        self._history: list[dict] = []
+
+    @staticmethod
+    def _extract_message_content(message) -> str:
+        if isinstance(message, str):
+            return message.strip()
+        if not isinstance(message, dict):
+            return ""
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts = []
+            for entry in content:
+                if isinstance(entry, str):
+                    txt = entry.strip()
+                    if txt:
+                        parts.append(txt)
+                elif isinstance(entry, dict):
+                    txt = str(entry.get("text") or entry.get("content") or "").strip()
+                    if txt:
+                        parts.append(txt)
+            return "\n".join(parts).strip()
+        return ""
+
+    async def _send_text(self, text: str) -> str:
+        self._history.append({"role": "user", "content": text})
+
+        for use_response_format in (True, False):
+            request_json = {
+                "model": self.model,
+                "messages": self._history,
+                "temperature": 0.2,
+            }
+            if use_response_format:
+                request_json["response_format"] = {"type": "json_object"}
+
+            async with httpx.AsyncClient(timeout=120) as client:
+                resp = await client.post(
+                    "https://llm.chutes.ai/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=request_json,
+                )
+
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Chutes API error: {resp.status_code} {resp.text[:300]}")
+
+            data = resp.json()
+            err_obj = data.get("error") if isinstance(data, dict) else None
+            if isinstance(err_obj, dict):
+                msg = str(err_obj.get("message") or "").strip()
+                if msg:
+                    raise RuntimeError(f"Chutes error: {msg}")
+
+            choices = data.get("choices") or []
+            if not choices:
+                if use_response_format:
+                    continue
+                raise RuntimeError(f"Chutes returned no choices. Response: {str(data)[:300]}")
+
+            message = choices[0].get("message") or {}
+            out = self._extract_message_content(message)
+            if out:
+                self._history.append({"role": "assistant", "content": out})
+                return out
+            if not use_response_format:
+                raise RuntimeError(f"Chutes returned empty content. Choice: {str(choices[0])[:300]}")
+
+        raise RuntimeError("Chutes returned no usable output")
+
+    @staticmethod
+    def _extract_json(raw: str):
+        payload = raw.strip()
+        if payload.startswith("```"):
+            payload = payload.strip("`")
+            marker_idx = payload.find("\n")
+            if marker_idx >= 0:
+                payload = payload[marker_idx + 1 :]
+        payload = payload.strip()
+        if payload.startswith("json"):
+            payload = payload[4:].strip()
+        if payload.endswith("```"):
+            payload = payload[:-3].strip()
+        return json.loads(payload)
+
+    @staticmethod
+    def _coerce_rows_payload(parsed):
+        # Accept several common response shapes from chat models.
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            numeric_pairs = []
+            for key, value in parsed.items():
+                try:
+                    seg_idx = int(str(key).strip())
+                except Exception:
+                    continue
+                if isinstance(value, dict):
+                    text = ChutesTrackTranslator._row_text(value)
+                else:
+                    text = str(value or "").strip()
+                if text:
+                    numeric_pairs.append({"segment_index": seg_idx, "text": text})
+            if numeric_pairs:
+                numeric_pairs.sort(key=lambda x: x["segment_index"])
+                return numeric_pairs
+            for key in ("translated_segments", "translations", "segments", "results", "items", "data"):
+                maybe = parsed.get(key)
+                if isinstance(maybe, list):
+                    return maybe
+            if "segment_index" in parsed and ("text" in parsed or "translation" in parsed):
+                return [parsed]
+            nested = parsed.get("output") or parsed.get("json")
+            if isinstance(nested, str):
+                try:
+                    nested_parsed = ChutesTrackTranslator._extract_json(nested)
+                    return ChutesTrackTranslator._coerce_rows_payload(nested_parsed)
+                except Exception:
+                    pass
+        return None
+
+    @staticmethod
+    def _row_text(row: dict) -> str:
+        return str(
+            row.get("text")
+            or row.get("translation")
+            or row.get("translated_text")
+            or row.get("content")
+            or row.get("output")
+            or row.get("value")
+            or ""
+        ).strip()
+
+    @staticmethod
+    def _row_index(row: dict):
+        return row.get(
+            "segment_index",
+            row.get(
+                "segmentIndex",
+                row.get("index", row.get("id", row.get("line", row.get("line_number")))),
+            ),
+        )
+
+    @staticmethod
+    def _extract_json_candidate(raw: str):
+        text = str(raw or "").strip()
+        first_arr = text.find("[")
+        last_arr = text.rfind("]")
+        if first_arr >= 0 and last_arr > first_arr:
+            candidate = text[first_arr:last_arr + 1]
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+        first_obj = text.find("{")
+        last_obj = text.rfind("}")
+        if first_obj >= 0 and last_obj > first_obj:
+            candidate = text[first_obj:last_obj + 1]
+            try:
+                return json.loads(candidate)
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _coerce_rows_from_lines(raw: str):
+        rows = []
+        pattern = re.compile(r"^\s*(?:\#|\[)?(\d{1,6})(?:\]|\)|:|-|\.)\s*(.+?)\s*$")
+        for line in str(raw or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = pattern.match(line)
+            if not m:
+                continue
+            rows.append({"segment_index": int(m.group(1)), "text": m.group(2).strip()})
+        return rows if rows else None
+
+    async def _repair_chunk_output_to_json(self, raw_output: str) -> list | None:
+        prompt = (
+            "Convert the following model output into strict JSON array only.\n"
+            "Output format: [{\"segment_index\":123,\"text\":\"...\"}]\n"
+            "Do not add commentary.\n\n"
+            f"Input:\n{raw_output}"
+        )
+        repaired_raw = await self._send_text(prompt)
+        try:
+            repaired_parsed = self._extract_json(repaired_raw)
+        except Exception:
+            candidate = self._extract_json_candidate(repaired_raw)
+            repaired_parsed = candidate
+        return self._coerce_rows_payload(repaired_parsed)
+
+    async def translate_text_to_en(self, text: str) -> str:
+        prompt = (
+            "Translate this Japanese drama CD description to natural English. "
+            "Return JSON object only: {\"text\":\"...\"}\n\n"
+            f"Text:\n{text}"
+        )
+        raw = await self._send_text(prompt)
+        parsed = self._extract_json(raw)
+        if isinstance(parsed, dict) and parsed.get("text"):
+            return str(parsed["text"]).strip()
+        raise RuntimeError("Description translation response did not contain text")
+
+    async def translate_chunk(
+        self,
+        *,
+        target_language: str,
+        description_context: str,
+        chunk_segments: list[dict],
+        prior_context: list[dict],
+        glossary: str = "",
+        character_memory: str = "",
+        previous_summaries: list[dict] = None,
+    ) -> list[dict]:
+        payload = [
+            {"segment_index": int(seg["segment_index"]), "text": str(seg["source_text"])}
+            for seg in chunk_segments
+        ]
+        prior_payload = [
+            {"segment_index": int(seg["segment_index"]), "text": str(seg["text"])}
+            for seg in prior_context[-4:]
+        ]
+        prompt = (
+            "You are translating Japanese drama CD transcript segments to " + target_language + ".\n"
+            "Your role: Preserve meaning, emotion, and character voice while creating natural, idiomatic translations.\n\n"
+            "CRITICAL REQUIREMENTS:\n"
+            "1. Respond ONLY with valid JSON array: [{\"segment_index\":N,\"text\":\"...\"}]\n"
+            "2. Preserve segment_index values exactly as provided.\n"
+            "3. Return exactly one translation per input segment.\n"
+            "4. No markdown, no code blocks, no commentary—just pure JSON.\n\n"
+            "TRANSLATION GUIDELINES:\n"
+            "• Prioritize natural, idiomatic language over literal translation.\n"
+            "• Preserve character voice: maintain each speaker's tone, formality level, and personality.\n"
+            "• Handle context: Use prior segments and drama description to understand character relationships and emotional subtext.\n"
+            "• Ambiguity: When multiple interpretations exist, choose the most contextually appropriate one.\n"
+            "• Consistency: Use the glossary and character memory to maintain consistent terminology and characterization.\n\n"
+            "SEXUAL CONTENT & ANATOMY RULES (CRITICAL):\n"
+            "When translating erotic content:\n"
+            "1. The listener/heroine is female. Always translate arousal language accordingly.\n"
+            "2. When Japanese uses masculine-coded slang (e.g., ぼっき) metaphorically for female arousal, DO NOT translate it literally as \"you're hard.\" Instead, render it as:\n"
+            "   • \"you're so turned on\"\n"
+            "   • \"you're this aroused\"\n"
+            "   • \"you're swollen with arousal\"\n"
+            "   • \"you're this sensitive\"\n"
+            "3. Never introduce male-genital interpretations unless explicitly present in the original text.\n"
+            "4. Avoid porn-hallucinatory embellishments not grounded in the Japanese.\n"
+            "5. Preserve emotional intensity without adding new sexual acts or fluids.\n\n"
+            f"CONTEXT:\n"
+            f"Drama description (translated): {description_context or '(none)'}\n"
+        )
+
+        # Add previous track summaries if available (N-1, N-2)
+        if previous_summaries:
+            prompt += "Previous track context summaries:\n"
+            for summary_data in previous_summaries:
+                track_idx = summary_data.get("track_index", "?")
+                summary_json = summary_data.get("summary_json", "{}")
+                prompt += f"Track {track_idx}: {summary_json}\n"
+            prompt += "\n"
+        else:
+            prompt += "Previous track summaries: (none)\n\n"
+
+        prompt += (
+            f"Preferred terms / glossary: {glossary or '(none)'}\n"
+            f"Character notes (personality, speech style): {character_memory or '(none)'}\n"
+            f"Prior segment context (last 4): {json.dumps(prior_payload, ensure_ascii=False)}\n\n"
+            f"SEGMENTS TO TRANSLATE:\n{json.dumps(payload, ensure_ascii=False)}\n\n"
+            "Return the JSON array only:"
+        )
+        logger.info(f"[ChutesTrackTranslator] Translating {len(chunk_segments)} segments to {target_language}")
+        raw = await self._send_text(prompt)
+        logger.debug(f"[ChutesTrackTranslator] Raw response (first 400 chars): {str(raw)[:400]}")
+
+        parsed = None
+        try:
+            parsed = self._extract_json(raw)
+        except Exception as e:
+            logger.debug(f"[ChutesTrackTranslator] _extract_json failed: {e}, trying _extract_json_candidate")
+            parsed = self._extract_json_candidate(raw)
+
+        rows_raw = self._coerce_rows_payload(parsed)
+        logger.debug(f"[ChutesTrackTranslator] After _coerce_rows_payload: {type(rows_raw).__name__}, len={len(rows_raw) if isinstance(rows_raw, list) else 'N/A'}")
+
+        if not isinstance(rows_raw, list):
+            rows_raw = self._coerce_rows_from_lines(raw)
+            logger.debug(f"[ChutesTrackTranslator] After _coerce_rows_from_lines: {type(rows_raw).__name__}, len={len(rows_raw) if isinstance(rows_raw, list) else 'N/A'}")
+
+        if not isinstance(rows_raw, list):
+            rows_raw = await self._repair_chunk_output_to_json(raw)
+            logger.debug(f"[ChutesTrackTranslator] After _repair_chunk_output_to_json: {type(rows_raw).__name__}, len={len(rows_raw) if isinstance(rows_raw, list) else 'N/A'}")
+
+        if not isinstance(rows_raw, list):
+            snippet = str(raw).replace("\n", " ")[:220]
+            logger.error(f"[ChutesTrackTranslator] Failed to parse output: {snippet}")
+            raise RuntimeError(f"Chunk translation did not return a JSON array. Raw snippet: {snippet}")
+
+        rows = []
+        for i, row in enumerate(rows_raw):
+            if isinstance(row, str):
+                text = row.strip()
+                if text:
+                    logger.warning(f"[ChutesTrackTranslator] Row {i} is string (no segment_index): {text[:100]}")
+                    # SKIP rows without segment_index - they can't be aligned to expected segments
+                continue
+            if not isinstance(row, dict):
+                logger.debug(f"[ChutesTrackTranslator] Skipping non-dict row {i}: {type(row).__name__}")
+                continue
+            text = self._row_text(row)
+            if not text:
+                logger.debug(f"[ChutesTrackTranslator] Row {i} has no text, keys: {list(row.keys())}")
+                continue
+            seg_idx = self._row_index(row)
+            parsed_idx = None
+            if seg_idx is not None:
+                try:
+                    parsed_idx = int(seg_idx)
+                except Exception:
+                    logger.warning(f"[ChutesTrackTranslator] Row {i} has non-int segment_index: {seg_idx}")
+                    parsed_idx = None
+
+            # CRITICAL FIX: Only append rows that have a valid segment_index
+            if parsed_idx is None:
+                logger.warning(f"[ChutesTrackTranslator] Skipping row {i}: no valid segment_index found in {list(row.keys())}")
+                continue
+
+            normalized = {
+                "segment_index": parsed_idx,  # Always include segment_index
+                "text": text,
+                "meta": {"provider": "chutes", "model": self.model},
+            }
+            rows.append(normalized)
+
+        logger.info(f"[ChutesTrackTranslator] Processed {len(rows)} rows with segment_index")
+        return rows

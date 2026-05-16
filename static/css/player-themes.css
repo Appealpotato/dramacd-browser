@@ -1,0 +1,347 @@
+/* ========================================
+   PLAYER THEME SYSTEM - COLOR ONLY
+   Three magical themes for audio playback
+   Overlays on top of style.css without breaking layout
+   ======================================== */
+
+/* ========== THEME: STARLIT WITCH TERMINAL ========== */
+body.player-theme-starlit {
+    --player-bg-deep: #1a1323 !important;
+    --player-panel-surface: rgba(255, 255, 255, 0.03) !important;
+    --player-panel-secondary: rgba(255, 255, 255, 0.05) !important;
+    --player-glow-accent: rgba(200, 90, 255, 0.35) !important;
+    --player-accent-pink: #e49ac6 !important;
+    --player-text-primary: #f4eaf7 !important;
+    --player-text-secondary: #a893b5 !important;
+    --player-border-soft: rgba(244, 234, 247, 0.05) !important;
+}
+
+/* ========== THEME: SWEET SPELLCASTER ========== */
+body.player-theme-sweet {
+    --player-bg-deep: #f5dde8 !important;
+    --player-bg-gradient: linear-gradient(135deg, #f8e8f0 0%, #f5dde8 40%, #f0d5e0 100%) !important;
+    --player-panel-surface: rgba(255, 245, 250, 0.65) !important;
+    --player-panel-hover: rgba(255, 235, 245, 0.85) !important;
+    --player-panel-active: rgba(255, 235, 245, 0.85) !important;
+    --player-glow-accent: rgba(220, 140, 190, 0.35) !important;
+    --player-accent-pink: #d98fc8 !important;
+    --player-accent-lavender: #d8a8d8 !important;
+    --player-accent-gradient: linear-gradient(135deg, #d98fc8 0%, #d8a8d8 100%) !important;
+    --player-text-primary: #664466 !important;
+    --player-text-secondary: #998899 !important;
+    --player-text-timestamp: #b888b8 !important;
+    --player-border-soft: rgba(220, 150, 200, 0.2) !important;
+    --player-border-active: #d8a0c8 !important;
+    --player-progress-track: rgba(230, 190, 220, 0.8) !important;
+    --player-shadow-pink: rgba(200, 120, 170, 0.15) !important;
+    --player-shadow-pink-strong: rgba(200, 120, 170, 0.25) !important;
+    --player-shadow-glow: rgba(210, 150, 190, 0.4) !important;
+}
+
+/* ========== THEME: ECLIPSE HARMONY ========== */
+body.player-theme-eclipse {
+    --player-bg-deep: #0f141c !important;
+    --player-bg-overlay: linear-gradient(180deg, rgba(70, 80, 110, 0.05) 0%, transparent 100%) !important;
+    --player-panel-surface: #1a212d !important;
+    --player-panel-secondary: #263145 !important;
+    --player-glow-accent: rgba(120, 140, 255, 0.4) !important;
+    --player-accent-primary: #536dff !important;
+    --player-accent-secondary: #8b9bff !important;
+    --player-text-primary: #e9eaef !important;
+    --player-text-secondary: #9ca3af !important;
+    --player-border-soft: rgba(156, 163, 175, 0.1) !important;
+}
+
+/* ========== APPLY THEME COLORS TO PLAYER ELEMENTS ========== */
+
+/* Player Container */
+body.player-theme-starlit .player-container {
+    background: #1a1323 !important;
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-sweet .player-container {
+    background: #f5dde8 !important;
+    color: #664466 !important;
+}
+
+body.player-theme-eclipse .player-container {
+    background: #0f141c !important;
+    color: #e9eaef !important;
+}
+
+/* Player Header */
+body.player-theme-starlit .player-header {
+    background: #1a1323 !important;
+    border-bottom-color: rgba(244, 234, 247, 0.05) !important;
+}
+
+body.player-theme-sweet .player-header {
+    background: #f5dde8 !important;
+    border-bottom-color: rgba(220, 150, 200, 0.2) !important;
+}
+
+body.player-theme-eclipse .player-header {
+    background: #0f141c !important;
+    border-bottom-color: rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Player Track Title/Info */
+body.player-theme-starlit .player-track-title {
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-sweet .player-track-title {
+    color: #664466 !important;
+}
+
+body.player-theme-eclipse .player-track-title {
+    color: #e9eaef !important;
+}
+
+/* Player Track Meta */
+body.player-theme-starlit .player-track-meta {
+    color: #a893b5 !important;
+}
+
+body.player-theme-sweet .player-track-meta {
+    color: #998899 !important;
+}
+
+body.player-theme-eclipse .player-track-meta {
+    color: #9ca3af !important;
+}
+
+/* Progress Bar */
+body.player-theme-starlit .player-progress-bar {
+    background: rgba(255, 255, 255, 0.05) !important;
+}
+
+body.player-theme-starlit .player-progress-fill {
+    background: #e49ac6 !important;
+}
+
+body.player-theme-sweet .player-progress-bar {
+    background: rgba(230, 190, 220, 0.8) !important;
+}
+
+body.player-theme-sweet .player-progress-fill {
+    background: linear-gradient(90deg, #d98fc8 0%, #d8a8d8 100%) !important;
+}
+
+body.player-theme-eclipse .player-progress-bar {
+    background: rgba(156, 163, 175, 0.1) !important;
+}
+
+body.player-theme-eclipse .player-progress-fill {
+    background: #536dff !important;
+}
+
+/* Control Buttons */
+body.player-theme-starlit .control-btn {
+    background: rgba(255, 255, 255, 0.05) !important;
+    color: #f4eaf7 !important;
+    border-color: rgba(244, 234, 247, 0.05) !important;
+}
+
+body.player-theme-starlit .control-btn.play {
+    background: #e49ac6 !important;
+    color: #1a1323 !important;
+}
+
+body.player-theme-sweet .control-btn {
+    background: rgba(255, 245, 250, 0.65) !important;
+    color: #664466 !important;
+    border-color: rgba(220, 150, 200, 0.2) !important;
+}
+
+body.player-theme-sweet .control-btn.play {
+    background: linear-gradient(135deg, #d98fc8 0%, #d8a8d8 100%) !important;
+    color: white !important;
+}
+
+body.player-theme-eclipse .control-btn {
+    background: #263145 !important;
+    color: #e9eaef !important;
+    border-color: rgba(156, 163, 175, 0.1) !important;
+}
+
+body.player-theme-eclipse .control-btn.play {
+    background: #536dff !important;
+    color: white !important;
+}
+
+/* Transcript Segments */
+body.player-theme-starlit .player-transcript-segment {
+    background: rgba(255, 255, 255, 0.03) !important;
+    border-color: rgba(244, 234, 247, 0.05) !important;
+}
+
+body.player-theme-starlit .player-transcript-segment.active {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border-color: #e49ac6 !important;
+}
+
+body.player-theme-sweet .player-transcript-segment {
+    background: rgba(255, 245, 250, 0.65) !important;
+    border-color: rgba(220, 150, 200, 0.2) !important;
+}
+
+body.player-theme-sweet .player-transcript-segment.active {
+    background: rgba(255, 235, 245, 0.85) !important;
+    border-color: #d8a0c8 !important;
+}
+
+body.player-theme-eclipse .player-transcript-segment {
+    background: #1a212d !important;
+    border-color: rgba(156, 163, 175, 0.1) !important;
+}
+
+body.player-theme-eclipse .player-transcript-segment.active {
+    background: #263145 !important;
+    border-color: #536dff !important;
+}
+
+/* Segment Timestamp */
+body.player-theme-starlit .segment-timestamp {
+    color: #a893b5 !important;
+}
+
+body.player-theme-sweet .segment-timestamp {
+    color: #998899 !important;
+}
+
+body.player-theme-eclipse .segment-timestamp {
+    color: #9ca3af !important;
+}
+
+/* Transcript Text */
+body.player-theme-starlit .segment-text-original {
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-starlit .segment-text-translation {
+    color: #a893b5 !important;
+}
+
+body.player-theme-sweet .segment-text-original {
+    color: #664466 !important;
+}
+
+body.player-theme-sweet .segment-text-translation {
+    color: #998899 !important;
+}
+
+body.player-theme-eclipse .segment-text-original {
+    color: #e9eaef !important;
+}
+
+body.player-theme-eclipse .segment-text-translation {
+    color: #9ca3af !important;
+}
+
+/* Active segment text becomes brighter */
+body.player-theme-starlit .player-transcript-segment.active .segment-text-original {
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-starlit .player-transcript-segment.active .segment-text-translation {
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-sweet .player-transcript-segment.active .segment-text-original {
+    color: #664466 !important;
+}
+
+body.player-theme-sweet .player-transcript-segment.active .segment-text-translation {
+    color: #664466 !important;
+}
+
+body.player-theme-eclipse .player-transcript-segment.active .segment-text-original {
+    color: #e9eaef !important;
+}
+
+body.player-theme-eclipse .player-transcript-segment.active .segment-text-translation {
+    color: #e9eaef !important;
+}
+
+/* Mini Player Bar */
+body.player-theme-starlit .player-mini-bar {
+    background: rgba(28, 21, 33, 0.95) !important;
+    border-top-color: rgba(244, 234, 247, 0.05) !important;
+}
+
+body.player-theme-sweet .player-mini-bar {
+    background: rgba(250, 235, 245, 0.85) !important;
+    border-top-color: rgba(220, 150, 200, 0.2) !important;
+}
+
+body.player-theme-eclipse .player-mini-bar {
+    background: rgba(26, 33, 45, 0.95) !important;
+    border-top-color: rgba(156, 163, 175, 0.1) !important;
+}
+
+/* Mini Player Title */
+body.player-theme-starlit .mini-player-title {
+    color: #f4eaf7 !important;
+}
+
+body.player-theme-sweet .mini-player-title {
+    color: #664466 !important;
+}
+
+body.player-theme-eclipse .mini-player-title {
+    color: #e9eaef !important;
+}
+
+/* Mini Player Buttons */
+body.player-theme-starlit .mini-player-btn {
+    background: #e49ac6 !important;
+}
+
+body.player-theme-sweet .mini-player-btn {
+    background: linear-gradient(135deg, #d98fc8 0%, #d8a8d8 100%) !important;
+}
+
+body.player-theme-eclipse .mini-player-btn {
+    background: #536dff !important;
+}
+
+/* Mini Player Progress */
+body.player-theme-starlit .mini-player-progress-fill {
+    background: #e49ac6 !important;
+}
+
+body.player-theme-sweet .mini-player-progress-fill {
+    background: linear-gradient(90deg, #d98fc8 0%, #d8a8d8 100%) !important;
+}
+
+body.player-theme-eclipse .mini-player-progress-fill {
+    background: #536dff !important;
+}
+
+/* Player Time Display */
+body.player-theme-starlit .player-time-display {
+    color: #a893b5 !important;
+}
+
+body.player-theme-sweet .player-time-display {
+    color: #998899 !important;
+}
+
+body.player-theme-eclipse .player-time-display {
+    color: #9ca3af !important;
+}
+
+/* Button Hover States */
+body.player-theme-starlit .control-btn:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+body.player-theme-sweet .control-btn:hover {
+    background: rgba(255, 235, 245, 0.85) !important;
+}
+
+body.player-theme-eclipse .control-btn:hover {
+    background: #2a3552 !important;
+}
