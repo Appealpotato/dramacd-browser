@@ -1494,6 +1494,33 @@ async def unconfirm_match(item_id: int, request: ConfirmMatchRequest, _auth=Depe
     return updated
 
 
+@router.get("/items/{item_id}/glossary")
+async def get_item_glossary_endpoint(item_id: int):
+    """Read the per-item translator glossary. Public read so the Workshop can
+    load it without prompting for the API key."""
+    glossary = await db.get_item_glossary(item_id)
+    if glossary is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id, "glossary": glossary}
+
+
+@router.put("/items/{item_id}/glossary")
+async def set_item_glossary_endpoint(item_id: int, payload: dict, _auth=Depends(require_api_key)):
+    """Write the per-item translator glossary. Accepts ``{"glossary": "..."}``.
+    Empty string clears it."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    glossary = payload.get("glossary", "")
+    if glossary is None:
+        glossary = ""
+    if not isinstance(glossary, str):
+        raise HTTPException(status_code=400, detail="glossary must be a string")
+    ok = await db.set_item_glossary(item_id, glossary)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id, "glossary": glossary}
+
+
 @router.patch("/items/{item_id}/manual-track-count")
 async def set_item_manual_track_count_endpoint(item_id: int, payload: dict, _auth=Depends(require_api_key)):
     """Set or clear the manual track-count override on an item. Send

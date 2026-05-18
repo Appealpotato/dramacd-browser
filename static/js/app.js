@@ -718,6 +718,16 @@ const app = createApp({
         const selectedTranscriptRunId = ref(null);
         const selectedTranscriptCleanText = ref('');
         const selectedTranslationSegments = ref([]);
+        const selectedTranslationRunId = ref(null);
+
+        // Shared inline segment editor state. Only one segment is edited at a
+        // time across the whole app — Player and Workshop reuse the same buffer
+        // so opening a new edit auto-closes any in-progress one.
+        // kind: 'transcript' | 'translation'; surface: 'player' | 'workshop'.
+        const editingSegment = ref(null);
+        const editingSegmentText = ref('');
+        const editingSegmentSaving = ref(false);
+        const editingSegmentError = ref('');
         const transcribeLanguage = ref('ja');
         const transcribeModel = ref('small');
         const transcriptionInProgress = ref(false);
@@ -956,7 +966,15 @@ const app = createApp({
         const playerProgressPercent = ref(0);
         const playerTranscriptSegments = ref([]);
         const playerTranslationSegments = ref([]);
+        const playerTranscriptRunId = ref(null);
+        const playerTranslationRunId = ref(null);
         const playerActiveSegmentIndex = ref(-1);
+        // Player-only safety: pencil icons stay hidden until the user opts in.
+        // Prevents fat-fingering an edit while watching. Persists across reloads.
+        const playerEditMode = ref(localStorage.getItem('player_edit_mode') === '1');
+        // Glossary textarea collapse state inside the Workshop translate card.
+        // Default collapsed since most translate runs don't need a glossary.
+        const glossaryExpanded = ref(localStorage.getItem('glossaryExpanded') === '1');
         const playerFollowTranscript = ref(true);
         const playerLastUserScrollTime = ref(0);
         const playerAudioElement = ref(null);
@@ -1022,8 +1040,26 @@ const app = createApp({
             localStorage.setItem('fetchProgress', JSON.stringify(value));
         }, { deep: true });
 
+        // Glossary is per-item now (stored in items.glossary). The watcher
+        // below debounces writes back to the server; an in-flight load suppresses
+        // the watcher via _glossaryLoading so hydrating the field doesn't
+        // immediately PUT it back.
+        const _glossaryLoading = ref(false);
+        const _glossaryItemId = ref(null);
+        let _glossarySaveTimer = null;
         watch(autoTranslateGlossary, (value) => {
-            localStorage.setItem('autoTranslateGlossary', String(value || ''));
+            if (_glossaryLoading.value) return;
+            const itemId = _glossaryItemId.value;
+            if (!itemId) return;
+            if (_glossarySaveTimer) clearTimeout(_glossarySaveTimer);
+            _glossarySaveTimer = setTimeout(() => {
+                _glossarySaveTimer = null;
+                fetch(`/api/items/${itemId}/glossary`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ glossary: String(value || '') }),
+                }).catch((err) => console.warn('Glossary save failed:', err));
+            }, 600);
         });
 
         watch(autoTranslateCharacterMemory, (value) => {
@@ -4921,6 +4957,7 @@ const app = createApp({
                     selectedTranscriptRunId.value = null;
                     selectedTranscriptCleanText.value = '';
                     selectedTranslationSegments.value = [];
+                    selectedTranslationRunId.value = null;
                     pipelineActiveSummary.value = 'Atelier disabled';
                 }
             } catch (err) {
@@ -5471,6 +5508,50 @@ const app = createApp({
             loadArchiveContents(newId);
         }, { immediate: true });
 
+        // Per-item glossary load. Fires whenever the Workshop's selected item
+        // changes (including the initial localStorage rehydrate). _glossaryLoading
+        // is true while we set the value so the save-debounce watcher above
+        // doesn't immediately PUT the freshly-loaded text back.
+        watch(pipelineSelectedItemId, async (newId) => {
+            // Drop any pending save from the previous item — its target id is stale.
+            if (_glossarySaveTimer) {
+                clearTimeout(_glossarySaveTimer);
+                _glossarySaveTimer = null;
+            }
+            if (!newId) {
+                _glossaryLoading.value = true;
+                _glossaryItemId.value = null;
+                autoTranslateGlossary.value = '';
+                await nextTick();
+                _glossaryLoading.value = false;
+                return;
+            }
+            try {
+                const resp = await fetch(`/api/items/${newId}/glossary`);
+                if (!resp.ok) {
+                    _glossaryLoading.value = true;
+                    _glossaryItemId.value = newId;
+                    autoTranslateGlossary.value = '';
+                    await nextTick();
+                    _glossaryLoading.value = false;
+                    return;
+                }
+                const data = await resp.json();
+                _glossaryLoading.value = true;
+                _glossaryItemId.value = newId;
+                autoTranslateGlossary.value = String(data.glossary || '');
+                await nextTick();
+                _glossaryLoading.value = false;
+            } catch (err) {
+                console.warn('Failed to load item glossary:', err);
+                _glossaryLoading.value = true;
+                _glossaryItemId.value = newId;
+                autoTranslateGlossary.value = '';
+                await nextTick();
+                _glossaryLoading.value = false;
+            }
+        }, { immediate: true });
+
         async function loadArchiveContents(itemId) {
             if (!itemId) {
                 archiveContents.value = null;
@@ -5623,6 +5704,7 @@ const app = createApp({
             selectedTranscriptRunId.value = null;
             selectedTranscriptCleanText.value = '';
             selectedTranslationSegments.value = [];
+            selectedTranslationRunId.value = null;
             try {
                 const resp = await fetch(`/api/pipeline/items/${pipelineSelectedItemId.value}/tracks`);
                 const data = await resp.json();
@@ -6280,6 +6362,7 @@ const app = createApp({
                     return;
                 }
                 selectedTranslationSegments.value = Array.isArray(data.segments) ? data.segments : [];
+                selectedTranslationRunId.value = runId;
             } catch (err) {
                 pipelineLoadError.value = 'Failed to load translation run detail';
                 console.error('Failed to load translation run detail:', err);
@@ -6291,6 +6374,144 @@ const app = createApp({
         function closeSegmentViewer() {
             selectedTranscriptSegments.value = [];
             selectedTranslationSegments.value = [];
+            selectedTranslationRunId.value = null;
+            cancelSegmentEdit();
+        }
+
+        // ---- Inline segment editor ---------------------------------------
+        // Shared across Player and Workshop views — only one segment can be
+        // edited at a time. Saves PATCH to the API, then patches the matching
+        // segment(s) in any loaded array (player or workshop) so both views
+        // stay consistent without re-fetching.
+        function startSegmentEdit(surface, kind, idx, currentText) {
+            editingSegmentError.value = '';
+            editingSegment.value = { surface, kind, idx };
+            editingSegmentText.value = String(currentText || '');
+        }
+
+        function cancelSegmentEdit() {
+            editingSegment.value = null;
+            editingSegmentText.value = '';
+            editingSegmentSaving.value = false;
+            editingSegmentError.value = '';
+        }
+
+        function isEditingSegment(surface, kind, idx) {
+            const e = editingSegment.value;
+            return !!e && e.surface === surface && e.kind === kind && e.idx === idx;
+        }
+
+        function _patchLocalSegmentText(arr, segmentIndex, newText) {
+            if (!Array.isArray(arr)) return;
+            for (let i = 0; i < arr.length; i++) {
+                const seg = arr[i];
+                if (seg && Number(seg.segment_index) === Number(segmentIndex)) {
+                    const meta = Object.assign({}, seg.meta_json || {}, { edited: true });
+                    arr[i] = Object.assign({}, seg, { text: newText, meta_json: meta });
+                }
+            }
+        }
+
+        async function saveSegmentEdit() {
+            const e = editingSegment.value;
+            if (!e) return;
+            const text = String(editingSegmentText.value || '');
+
+            // Resolve which (trackId, runId) to PATCH. We accept the edit from
+            // either surface and pick the right run id for the kind.
+            let trackId = null;
+            let runId = null;
+            if (e.kind === 'transcript') {
+                trackId = e.surface === 'player' ? playerTrackId.value : pipelineTrackId.value;
+                runId = e.surface === 'player' ? playerTranscriptRunId.value : selectedTranscriptRunId.value;
+            } else {
+                trackId = e.surface === 'player' ? playerTrackId.value : pipelineTrackId.value;
+                runId = e.surface === 'player' ? playerTranslationRunId.value : selectedTranslationRunId.value;
+            }
+            if (!trackId || !runId) {
+                editingSegmentError.value = 'Missing track or run id';
+                return;
+            }
+
+            // Look up segment_index from the source array (idx is array index,
+            // segment_index is the stable DB key — usually the same but not
+            // guaranteed).
+            let sourceArr = null;
+            if (e.surface === 'player') {
+                sourceArr = e.kind === 'transcript'
+                    ? playerTranscriptSegments.value
+                    : playerTranslationSegments.value;
+            } else {
+                sourceArr = e.kind === 'transcript'
+                    ? selectedTranscriptSegments.value
+                    : selectedTranslationSegments.value;
+            }
+            const seg = sourceArr && sourceArr[e.idx];
+            if (!seg) {
+                editingSegmentError.value = 'Segment not found';
+                return;
+            }
+            const segmentIndex = Number(seg.segment_index);
+
+            editingSegmentSaving.value = true;
+            editingSegmentError.value = '';
+            try {
+                const url = e.kind === 'transcript'
+                    ? `/api/pipeline/tracks/${trackId}/transcripts/${runId}/segments/${segmentIndex}`
+                    : `/api/pipeline/tracks/${trackId}/translations/${runId}/segments/${segmentIndex}`;
+                const resp = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text }),
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    editingSegmentError.value = data.detail || `Save failed (${resp.status})`;
+                    editingSegmentSaving.value = false;
+                    return;
+                }
+                // Patch every loaded copy of this segment so both player and
+                // workshop reflect the edit (if the same run is open in both).
+                if (e.kind === 'transcript') {
+                    if (playerTranscriptRunId.value === runId) {
+                        _patchLocalSegmentText(playerTranscriptSegments.value, segmentIndex, text);
+                    }
+                    if (selectedTranscriptRunId.value === runId) {
+                        _patchLocalSegmentText(selectedTranscriptSegments.value, segmentIndex, text);
+                    }
+                } else {
+                    if (playerTranslationRunId.value === runId) {
+                        _patchLocalSegmentText(playerTranslationSegments.value, segmentIndex, text);
+                    }
+                    if (selectedTranslationRunId.value === runId) {
+                        _patchLocalSegmentText(selectedTranslationSegments.value, segmentIndex, text);
+                    }
+                }
+                cancelSegmentEdit();
+            } catch (err) {
+                console.error('Failed to save segment edit:', err);
+                editingSegmentError.value = 'Save failed';
+                editingSegmentSaving.value = false;
+            }
+        }
+
+        function segmentIsEdited(seg) {
+            return !!(seg && seg.meta_json && seg.meta_json.edited);
+        }
+
+        function toggleGlossaryExpanded() {
+            glossaryExpanded.value = !glossaryExpanded.value;
+            localStorage.setItem('glossaryExpanded', glossaryExpanded.value ? '1' : '0');
+        }
+
+        function togglePlayerEditMode() {
+            playerEditMode.value = !playerEditMode.value;
+            localStorage.setItem('player_edit_mode', playerEditMode.value ? '1' : '0');
+            // Turning the toggle off mid-edit shouldn't leave a stale buffer
+            // hanging on the line, so cancel any in-progress player edit.
+            if (!playerEditMode.value && editingSegment.value && editingSegment.value.surface === 'player') {
+                cancelSegmentEdit();
+            }
         }
 
         // ---- Inline delete-confirm pattern -------------------------------
@@ -7940,7 +8161,10 @@ const app = createApp({
             // Restore fetch state from localStorage and resume polling in background (don't block UI)
             const savedFetchRunning = localStorage.getItem('fetchRunning');
             const savedFetchProgress = localStorage.getItem('fetchProgress');
-            autoTranslateGlossary.value = localStorage.getItem('autoTranslateGlossary') || '';
+            // Glossary is now per-item; populated when an item is loaded into the Workshop.
+            autoTranslateGlossary.value = '';
+            // Drop the old global value if it's still hanging around from a prior version.
+            try { localStorage.removeItem('autoTranslateGlossary'); } catch (e) {}
             autoTranslateCharacterMemory.value = localStorage.getItem('autoTranslateCharacterMemory') || '';
             autoTranslateMaxRetries.value = Number(localStorage.getItem('autoTranslateMaxRetries') || autoTranslateMaxRetries.value);
             autoTranslateRetryBackoff.value = Number(localStorage.getItem('autoTranslateRetryBackoff') || autoTranslateRetryBackoff.value);
@@ -8125,6 +8349,7 @@ const app = createApp({
                     const transcriptResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts/${transcriptRunId}`);
                     const transcriptData = await transcriptResp.json();
                     playerTranscriptSegments.value = transcriptData.segments || [];
+                    playerTranscriptRunId.value = transcriptRunId;
                 } else {
                     // Try to load active transcript
                     const activeResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts`);
@@ -8135,8 +8360,10 @@ const app = createApp({
                         const transcriptResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts/${activeTranscriptRunId}`);
                         const transcriptData = await transcriptResp.json();
                         playerTranscriptSegments.value = transcriptData.segments || [];
+                        playerTranscriptRunId.value = activeTranscriptRunId;
                     } else {
                         playerTranscriptSegments.value = [];
+                        playerTranscriptRunId.value = null;
                     }
                 }
 
@@ -8145,6 +8372,7 @@ const app = createApp({
                     const translationResp = await fetch(`/api/pipeline/tracks/${trackId}/translations/${translationRunId}`);
                     const translationData = await translationResp.json();
                     playerTranslationSegments.value = translationData.segments || [];
+                    playerTranslationRunId.value = translationRunId;
                 } else {
                     // Try to load active translation
                     const activeResp = await fetch(`/api/pipeline/tracks/${trackId}/translations`);
@@ -8155,8 +8383,10 @@ const app = createApp({
                         const translationResp = await fetch(`/api/pipeline/tracks/${trackId}/translations/${activeTranslationRunId}`);
                         const translationData = await translationResp.json();
                         playerTranslationSegments.value = translationData.segments || [];
+                        playerTranslationRunId.value = activeTranslationRunId;
                     } else {
                         playerTranslationSegments.value = [];
+                        playerTranslationRunId.value = null;
                     }
                 }
 
@@ -8507,7 +8737,14 @@ const app = createApp({
             playerTrackId, playerTrackTitle, playerTrackDuration, playerIsPlaying,
             playerCurrentTime, playerDuration, playerProgressPercent,
             playerTranscriptSegments, playerTranslationSegments, playerActiveSegmentIndex,
+            playerTranscriptRunId, playerTranslationRunId,
+            playerEditMode, togglePlayerEditMode,
+            glossaryExpanded, toggleGlossaryExpanded,
             playerAudioElement,
+            // Inline segment editor (shared between Player + Workshop).
+            editingSegment, editingSegmentText, editingSegmentSaving, editingSegmentError,
+            startSegmentEdit, cancelSegmentEdit, saveSegmentEdit, isEditingSegment, segmentIsEdited,
+            selectedTranslationRunId,
             transcriptList,
             transcriptScroll,
             scrollActiveTranscriptIntoView, lyricLineClass,

@@ -397,6 +397,8 @@ MIGRATION_IDS = [
     "020_add_vndb_searched",
     "021_add_ignored_game_paths",
     "022_add_extra_library_paths",
+    "023_add_items_glossary",
+    "024_backfill_tokuten_titles_from_items",
 ]
 
 # Migrations whose first run should trigger an on-disk backup of library.db.
@@ -1128,6 +1130,65 @@ async def _migration_016_games_wishlist_and_is_manual(db: aiosqlite.Connection):
     await db.execute("CREATE INDEX IF NOT EXISTS idx_items_is_manual ON items(is_manual)")
 
 
+async def _migration_023_add_items_glossary(db: aiosqlite.Connection):
+    """Per-item translator glossary. Free-form text the user pastes (e.g.
+    '智恵 = Tomoe, 茅 = Chigaya') that gets prepended to every translation
+    prompt for tracks belonging to this item. Scoped to the item so character
+    name mappings from one CD don't leak into another."""
+    if not await _column_exists(db, "items", "glossary"):
+        await db.execute(
+            "ALTER TABLE items ADD COLUMN glossary TEXT NOT NULL DEFAULT ''"
+        )
+
+
+async def _migration_024_backfill_tokuten_titles_from_items(db: aiosqlite.Connection):
+    """Pre-fix: items PUT didn't mirror title onto the linked tokutens row, so
+    manual tokutens edited via the items detail panel kept the
+    '[New Tokuten]' placeholder in tokutens.title — visible in the game detail
+    panel's linked-tokutens list. Copy items.title onto tokutens.title (and
+    title_en) only for rows where the tokuten still has the placeholder."""
+    if not await _table_exists(db, "tokutens"):
+        return
+    await db.execute(
+        """UPDATE tokutens
+           SET title = (
+                   SELECT items.title FROM items
+                   WHERE items.tokuten_id = tokutens.id
+                     AND items.title IS NOT NULL
+                     AND items.title != ''
+                     AND items.title != '[New Tokuten]'
+                   LIMIT 1
+               ),
+               updated_at = ?
+           WHERE tokutens.title = '[New Tokuten]'
+             AND EXISTS (
+                   SELECT 1 FROM items
+                   WHERE items.tokuten_id = tokutens.id
+                     AND items.title IS NOT NULL
+                     AND items.title != ''
+                     AND items.title != '[New Tokuten]'
+               )""",
+        (datetime.now().isoformat(),),
+    )
+    await db.execute(
+        """UPDATE tokutens
+           SET title_en = (
+                   SELECT items.title_en FROM items
+                   WHERE items.tokuten_id = tokutens.id
+                     AND items.title_en IS NOT NULL
+                     AND items.title_en != ''
+                   LIMIT 1
+               )
+           WHERE (tokutens.title_en IS NULL OR tokutens.title_en = '')
+             AND EXISTS (
+                   SELECT 1 FROM items
+                   WHERE items.tokuten_id = tokutens.id
+                     AND items.title_en IS NOT NULL
+                     AND items.title_en != ''
+               )""",
+    )
+
+
 async def _migration_022_add_extra_library_paths(db: aiosqlite.Connection):
     """Same game on multiple platforms / install locations. The primary
     library_path stays as-is (scanner upserts on it); additional paths
@@ -1313,6 +1374,8 @@ MIGRATION_HANDLERS = {
     "020_add_vndb_searched": _migration_020_add_vndb_searched,
     "021_add_ignored_game_paths": _migration_021_add_ignored_game_paths,
     "022_add_extra_library_paths": _migration_022_add_extra_library_paths,
+    "023_add_items_glossary": _migration_023_add_items_glossary,
+    "024_backfill_tokuten_titles_from_items": _migration_024_backfill_tokuten_titles_from_items,
 }
 
 
@@ -2139,6 +2202,32 @@ async def update_item_user_data(item_id: int, data: dict):
             f"UPDATE items SET {', '.join(fields)} WHERE id = ?",
             values
         )
+        # Mirror title/title_en onto the linked tokutens row when this item
+        # is a tokuten_audio. The reverse mirror (tokutens.title → items.title)
+        # already lives in routers/tokutens.py; without this side, edits made
+        # via the items detail panel leave tokutens.title stale, which surfaces
+        # as "[New Tokuten]" in the game-detail linked-tokutens list.
+        if "title" in data or "title_en" in data:
+            tk_cursor = await db.execute(
+                "SELECT tokuten_id FROM items WHERE id = ?", (item_id,)
+            )
+            tk_row = await tk_cursor.fetchone()
+            if tk_row and tk_row["tokuten_id"]:
+                tk_fields = []
+                tk_values = []
+                if "title" in data:
+                    tk_fields.append("title = ?")
+                    tk_values.append(data["title"])
+                if "title_en" in data:
+                    tk_fields.append("title_en = ?")
+                    tk_values.append(data["title_en"])
+                tk_fields.append("updated_at = ?")
+                tk_values.append(datetime.now().isoformat())
+                tk_values.append(tk_row["tokuten_id"])
+                await db.execute(
+                    f"UPDATE tokutens SET {', '.join(tk_fields)} WHERE id = ?",
+                    tk_values,
+                )
         if index_dirty:
             cursor = await db.execute(
                 "SELECT seiyuu, seiyuu_en, tags, tags_en, custom_tags FROM items WHERE id = ?",
@@ -2538,6 +2627,34 @@ async def get_item_by_product_code(product_code: str) -> dict | None:
         )
         row = await cursor.fetchone()
         return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def get_item_glossary(item_id: int) -> str | None:
+    """Return the per-item translator glossary, or None if the item is missing."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT glossary FROM items WHERE id = ?", (item_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row["glossary"] or ""
+    finally:
+        await db.close()
+
+
+async def set_item_glossary(item_id: int, glossary: str) -> bool:
+    """Write the per-item translator glossary. Returns False if item missing."""
+    db = await get_db()
+    try:
+        now = datetime.now().isoformat()
+        cursor = await db.execute(
+            "UPDATE items SET glossary = ?, updated_at = ? WHERE id = ?",
+            (str(glossary or ""), now, item_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
     finally:
         await db.close()
 
@@ -4723,6 +4840,82 @@ async def delete_translation_segments(run_id: int) -> int:
         cursor = await db.execute("DELETE FROM pipeline_translation_run_segments WHERE run_id = ?", (run_id,))
         await db.commit()
         return cursor.rowcount
+    finally:
+        await db.close()
+
+
+async def update_transcript_segment_text(run_id: int, segment_index: int, text: str) -> dict | None:
+    """Edit a single transcript segment's text in place.
+
+    Stamps meta_json.edited so the UI can mark manually-corrected lines.
+    Returns the updated row or None if no segment matched.
+    """
+    now = datetime.now().isoformat()
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM pipeline_transcript_run_segments WHERE run_id = ? AND segment_index = ?",
+            (run_id, segment_index),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        meta = _load_json_field(row["meta_json"], {})
+        meta["edited"] = True
+        meta["edited_at"] = now
+        await db.execute(
+            """UPDATE pipeline_transcript_run_segments
+               SET text = ?, meta_json = ?, updated_at = ?
+               WHERE run_id = ? AND segment_index = ?""",
+            (text, json.dumps(meta, ensure_ascii=False), now, run_id, segment_index),
+        )
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT * FROM pipeline_transcript_run_segments WHERE run_id = ? AND segment_index = ?",
+            (run_id, segment_index),
+        )
+        updated = await cursor.fetchone()
+        if not updated:
+            return None
+        out = dict(updated)
+        out["meta_json"] = _load_json_field(out.get("meta_json"), {})
+        return out
+    finally:
+        await db.close()
+
+
+async def update_translation_segment_text(run_id: int, segment_index: int, text: str) -> dict | None:
+    """Edit a single translation segment's text in place. See sibling above."""
+    now = datetime.now().isoformat()
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT * FROM pipeline_translation_run_segments WHERE run_id = ? AND segment_index = ?",
+            (run_id, segment_index),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        meta = _load_json_field(row["meta_json"], {})
+        meta["edited"] = True
+        meta["edited_at"] = now
+        await db.execute(
+            """UPDATE pipeline_translation_run_segments
+               SET text = ?, meta_json = ?, updated_at = ?
+               WHERE run_id = ? AND segment_index = ?""",
+            (text, json.dumps(meta, ensure_ascii=False), now, run_id, segment_index),
+        )
+        await db.commit()
+        cursor = await db.execute(
+            "SELECT * FROM pipeline_translation_run_segments WHERE run_id = ? AND segment_index = ?",
+            (run_id, segment_index),
+        )
+        updated = await cursor.fetchone()
+        if not updated:
+            return None
+        out = dict(updated)
+        out["meta_json"] = _load_json_field(out.get("meta_json"), {})
+        return out
     finally:
         await db.close()
 

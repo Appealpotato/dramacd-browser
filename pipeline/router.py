@@ -18,6 +18,7 @@ from models import (
     AutoTranscribeRequest,
     PipelineExtractRequest,
     PipelineToggleRequest,
+    SegmentTextUpdateRequest,
     TranscriptRunCreateRequest,
     TranslationRunCreateRequest,
 )
@@ -1002,6 +1003,29 @@ async def get_track_transcript_run(track_id: int, run_id: int):
     return {"track_id": track_id, "run": run, "segments": segments, "clean_source": clean_source}
 
 
+@router.patch("/tracks/{track_id}/transcripts/{run_id}/segments/{segment_index}")
+async def update_transcript_segment(
+    track_id: int,
+    run_id: int,
+    segment_index: int,
+    request: SegmentTextUpdateRequest,
+    _auth=Depends(require_api_key),
+):
+    """Edit a single transcript segment's text. Used by the inline editor in
+    the Player and Workshop views."""
+    await _ensure_pipeline_enabled()
+    track = await db.get_pipeline_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    run = await db.get_transcript_run(run_id)
+    if not run or int(run.get("track_id")) != track_id:
+        raise HTTPException(status_code=404, detail="Transcript run not found for this track")
+    updated = await db.update_transcript_segment_text(run_id, segment_index, request.text)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    return {"status": "updated", "segment": updated}
+
+
 @router.put("/tracks/{track_id}/active-transcript/{run_id}")
 async def set_track_active_transcript(track_id: int, run_id: int, _auth=Depends(require_api_key)):
     await _ensure_pipeline_enabled()
@@ -1069,6 +1093,28 @@ async def get_track_translation_run(track_id: int, run_id: int):
         raise HTTPException(status_code=404, detail="Translation run not found")
     segments = await db.get_translation_segments(run_id)
     return {"track_id": track_id, "run": run, "segments": segments}
+
+
+@router.patch("/tracks/{track_id}/translations/{run_id}/segments/{segment_index}")
+async def update_translation_segment(
+    track_id: int,
+    run_id: int,
+    segment_index: int,
+    request: SegmentTextUpdateRequest,
+    _auth=Depends(require_api_key),
+):
+    """Edit a single translation segment's text."""
+    await _ensure_pipeline_enabled()
+    track = await db.get_pipeline_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    run = await db.get_translation_run(run_id)
+    if not run or int(run.get("track_id")) != track_id:
+        raise HTTPException(status_code=404, detail="Translation run not found for this track")
+    updated = await db.update_translation_segment_text(run_id, segment_index, request.text)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    return {"status": "updated", "segment": updated}
 
 
 @router.put("/tracks/{track_id}/active-translation/{run_id}")

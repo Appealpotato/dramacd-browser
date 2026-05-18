@@ -157,6 +157,10 @@ class TranslationRunCreateRequest(BaseModel):
     segments: list[TranslationSegmentInput]
 
 
+class SegmentTextUpdateRequest(BaseModel):
+    text: str
+
+
 class PipelineToggleRequest(BaseModel):
     enabled: bool
 
