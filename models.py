@@ -246,9 +246,10 @@ TOKUTEN_KINDS = {"audio", "book", "image", "misc"}
 # "source" filter values exposed in the Tokutens sidebar. Stored as `shop`
 # on the tokutens row for legacy reasons. Migration 015 maps the old set
 # (animate/stellaworth/getchu/melonbooks/toranoana/amazon_jp/other) onto
-# this newer enum.
+# this newer enum; migration 026 adds the metadata-fetch sources
+# (gamers/chil_chil/vgmdb).
 TOKUTEN_SHOPS = {"dlsite", "booth", "melon", "animate", "stellaworth",
-                 "physical", "other"}
+                 "gamers", "chil_chil", "vgmdb", "physical", "other"}
 
 
 class TokutenCreate(BaseModel):
@@ -264,6 +265,12 @@ class TokutenCreate(BaseModel):
     # Independent VNDB id link — stored regardless of whether the matching
     # game exists in the local library. Read-side joins resolve it.
     vndb_id: Optional[str] = None
+    # Cast + description (migration 026) — lists are stored as JSON text in
+    # the seiyuu/seiyuu_en columns, mirroring items.
+    seiyuu: Optional[list[str]] = None
+    seiyuu_en: Optional[list[str]] = None
+    description: Optional[str] = None
+    description_en: Optional[str] = None
 
 
 class TokutenUpdate(BaseModel):
@@ -277,6 +284,29 @@ class TokutenUpdate(BaseModel):
     source_url: Optional[str] = None
     local_path: Optional[str] = None
     vndb_id: Optional[str] = None
+    seiyuu: Optional[list[str]] = None
+    seiyuu_en: Optional[list[str]] = None
+    description: Optional[str] = None
+    description_en: Optional[str] = None
+
+
+class MetadataFetchRequest(BaseModel):
+    url: str
+
+
+class MetadataSearchRequest(BaseModel):
+    query: str
+    source: Optional[str] = None  # omit to search all searchable sources
+
+
+class MetadataApplyRequest(BaseModel):
+    """Apply a (possibly user-edited) normalized metadata dict to an item or
+    tokuten. `fields` whitelists what gets written — the preview UI sends
+    only the checkboxes the user left on."""
+    target: str  # 'item' | 'tokuten'
+    target_id: int
+    metadata: dict
+    fields: list[str]
 
 
 class TokutenScanRequest(BaseModel):

@@ -570,6 +570,22 @@ const app = createApp({
         const vndbSearchError = transientRef('');
         let _vndbSearchTimer = null;
 
+        // External metadata fetch (Gamers / Chil-Chil) for manual items and
+        // tokutens. Preview-then-apply: fetch-url/search never write; the
+        // preview modal's checkboxes pick which fields POST /api/metadata/apply
+        // actually commits, so a fetch can't clobber hand-edited data.
+        const metaFetchUrl = ref('');
+        const metaFetchBusy = ref(false);
+        const metaFetchError = transientRef('', 8000);
+        const metaSearchQuery = ref('');
+        const metaSearchResults = ref([]);
+        const metaSearching = ref(false);
+        let _metaSearchTimer = null;
+        const metaPreview = ref(null);       // normalized metadata dict from the backend
+        const metaPreviewFields = ref({});    // { fieldName: bool } checkbox states
+        const metaApplyBusy = ref(false);
+        const metaApplyError = transientRef('', 8000);
+
         // Game cover upload state (parallel to coverUploadLoading for items).
         const gameCoverFileInput = ref(null);
         const gameCoverUploadLoading = ref(false);
@@ -2557,6 +2573,184 @@ const app = createApp({
                 if (idx >= 0) items.value[idx] = { ...items.value[idx], cover_local: updated.cover_local };
             } catch (err) {
                 console.warn('Tokuten cover download failed:', err);
+            }
+        }
+
+        // === External metadata fetch (Gamers / Chil-Chil) ===
+        // Available on manual drama CDs and tokuten cards inside the detail
+        // edit panel. Two entry points — paste a product URL, or title-search
+        // across all sources — both land in the same preview modal.
+        function metaSearchInput(value) {
+            metaSearchQuery.value = value;
+            if (_metaSearchTimer) clearTimeout(_metaSearchTimer);
+            const q = (value || '').trim();
+            if (!q) {
+                metaSearchResults.value = [];
+                return;
+            }
+            _metaSearchTimer = setTimeout(() => runMetaSearch(q), 400);
+        }
+        async function runMetaSearch(q) {
+            metaSearching.value = true;
+            try {
+                const resp = await fetch('/api/metadata/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: q }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    metaFetchError.value = err.detail || 'Search failed';
+                    metaSearchResults.value = [];
+                    return;
+                }
+                const data = await resp.json();
+                metaSearchResults.value = data.results || [];
+                if ((data.errors || []).length && !metaSearchResults.value.length) {
+                    metaFetchError.value = data.errors.join(' / ');
+                }
+            } catch (err) {
+                metaFetchError.value = 'Search failed';
+                metaSearchResults.value = [];
+            } finally {
+                metaSearching.value = false;
+            }
+        }
+        async function metaFetchFromUrl(url) {
+            const target = (url || metaFetchUrl.value || '').trim();
+            if (!target || metaFetchBusy.value) return;
+            metaFetchBusy.value = true;
+            metaFetchError.value = '';
+            try {
+                const resp = await fetch('/api/metadata/fetch-url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: target }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    metaFetchError.value = err.detail || 'Fetch failed';
+                    return;
+                }
+                const data = await resp.json();
+                _openMetaPreview(data.metadata);
+                // Collapse search results once a pick lands in the preview.
+                metaSearchResults.value = [];
+                metaSearchQuery.value = '';
+            } catch (err) {
+                metaFetchError.value = 'Fetch failed: ' + (err.message || err);
+            } finally {
+                metaFetchBusy.value = false;
+            }
+        }
+        function metaPickSearchResult(hit) {
+            if (!hit || !hit.url) return;
+            metaFetchFromUrl(hit.url);
+        }
+        function _metaTargetKind() {
+            const s = selectedItem.value;
+            return (s && s.kind === 'tokuten_audio' && s.tokuten_id) ? 'tokuten' : 'item';
+        }
+        function _openMetaPreview(meta) {
+            if (!meta) return;
+            const s = selectedItem.value || {};
+            const d = detailDraft.value || {};
+            const placeholder = (t) => !t || t === '[New Drama CD]' || t === '[New Tokuten]';
+            // Default checkboxes: fill blanks, never default-overwrite data
+            // the user already has. source_note is additive so it's always on.
+            const fields = {
+                title: !!meta.title && placeholder((d.title || s.title || '').trim()),
+                release_date: !!meta.release_date && !(d.release_date || s.release_date || '').trim(),
+                seiyuu: (meta.seiyuu || []).length > 0 && !(d.seiyuu || '').trim() && !(parseJson(s.seiyuu) || []).length,
+                description: !!meta.description && !(d.description || s.description || '').trim(),
+                cover: !!meta.cover_url && !s.cover_local,
+                source_note: true,
+            };
+            if (_metaTargetKind() === 'tokuten') {
+                fields.shop = true;
+                fields.source_url = true;
+            }
+            metaPreviewFields.value = fields;
+            metaPreview.value = meta;
+            metaApplyError.value = '';
+        }
+        function metaClosePreview() {
+            metaPreview.value = null;
+            metaPreviewFields.value = {};
+        }
+        function _resetMetaFetchState() {
+            metaFetchUrl.value = '';
+            metaSearchQuery.value = '';
+            metaSearchResults.value = [];
+            metaPreview.value = null;
+            metaPreviewFields.value = {};
+        }
+        // Client-side mirror of the backend's provenance stamp, for preview.
+        function metaNotePreview(meta) {
+            if (!meta) return '';
+            const parts = ['[' + (meta.source || '?') + ']'];
+            if (meta.price) parts.push(meta.price);
+            if (meta.catalog_number) parts.push('品番 ' + meta.catalog_number);
+            if (meta.jan) parts.push('JAN ' + meta.jan);
+            if (meta.maker) parts.push(meta.maker);
+            if (meta.series) parts.push('シリーズ: ' + meta.series);
+            if (meta.source_url) parts.push(meta.source_url);
+            parts.push('fetched ' + new Date().toISOString().slice(0, 10));
+            return parts.join(' ・ ');
+        }
+        async function metaApply() {
+            if (!metaPreview.value || !selectedItem.value || metaApplyBusy.value) return;
+            const kind = _metaTargetKind();
+            const targetId = kind === 'tokuten' ? selectedItem.value.tokuten_id : selectedItem.value.id;
+            const fields = Object.entries(metaPreviewFields.value)
+                .filter(([, on]) => on)
+                .map(([name]) => name);
+            if (!fields.length) {
+                metaApplyError.value = 'Nothing selected to apply';
+                return;
+            }
+            metaApplyBusy.value = true;
+            metaApplyError.value = '';
+            try {
+                const resp = await fetch('/api/metadata/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        target: kind,
+                        target_id: targetId,
+                        metadata: metaPreview.value,
+                        fields,
+                    }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    metaApplyError.value = err.detail || 'Apply failed';
+                    return;
+                }
+                // Re-pull the items row (apply writes server-side; for
+                // tokutens the mirror lands on the paired items row).
+                const itemResp = await fetch(`/api/items/${selectedItem.value.id}`);
+                if (itemResp.ok) {
+                    const updated = await itemResp.json();
+                    selectedItem.value = { ...updated };
+                    const idx = items.value.findIndex(i => i.id === updated.id);
+                    if (idx >= 0) items.value[idx] = { ...updated };
+                    // Refresh the staged draft with the applied values so a
+                    // later Save doesn't write stale pre-fetch data back.
+                    if (detailDraft.value) {
+                        const d = detailDraft.value;
+                        d.title = updated.title || '';
+                        d.release_date = updated.release_date || '';
+                        d.seiyuu = parseJson(updated.seiyuu).join(', ');
+                        d.description = updated.description || '';
+                    }
+                }
+                metaClosePreview();
+                pushToast({ kind: 'success', title: 'Metadata applied', ttl: 3000 });
+            } catch (err) {
+                metaApplyError.value = 'Apply failed: ' + (err.message || err);
+            } finally {
+                metaApplyBusy.value = false;
             }
         }
 
@@ -7286,6 +7480,7 @@ const app = createApp({
             detailEditing.value = false;
             detailDraft.value = null;
             detailSaveError.value = '';
+            _resetMetaFetchState();
             selectedItem.value = { ...item };
             overrideCodeInput.value = '';
             overrideError.value = '';
@@ -7417,6 +7612,7 @@ const app = createApp({
             detailEditing.value = false;
             detailDraft.value = null;
             detailSaveError.value = '';
+            _resetMetaFetchState();
             selectedItem.value = null;
         }
 
@@ -8940,6 +9136,12 @@ const app = createApp({
             openGameDetail, closeGameDetail, startGameEdit, cancelGameEdit, saveGameEdit,
             vndbQuery, vndbResults, vndbSearching, vndbSearchError,
             vndbSearchInput, applyVndbResult, applyVndbResultForTokuten,
+            // External metadata fetch (Gamers / Chil-Chil)
+            metaFetchUrl, metaFetchBusy, metaFetchError,
+            metaSearchQuery, metaSearchResults, metaSearching,
+            metaPreview, metaPreviewFields, metaApplyBusy, metaApplyError,
+            metaSearchInput, metaFetchFromUrl, metaPickSearchResult,
+            metaClosePreview, metaNotePreview, metaApply,
             gameCoverFileInput, gameCoverUploadLoading, gameCoverUploadError, gameCoverUploadSuccess,
             chooseGameCover, onGameCoverFileChange,
             vndbMatchBusy, vndbMatchMessage, vndbMatchError, matchVndbAll,

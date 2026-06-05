@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from config import APP_DIR, COVERS_DIR, HOST, PORT
 from database import init_db
 from pipeline import router as pipeline_router
-from routers import api, scan, tokutens as tokutens_router, games as games_router
+from routers import api, scan, tokutens as tokutens_router, games as games_router, metadata as metadata_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,6 +73,7 @@ app.include_router(scan.router)
 app.include_router(pipeline_router)
 app.include_router(tokutens_router.router)
 app.include_router(games_router.router)
+app.include_router(metadata_router.router)
 
 # Serve cover art from data/covers/
 COVERS_DIR.mkdir(parents=True, exist_ok=True)

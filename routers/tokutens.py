@@ -3,6 +3,7 @@ CDs and other side material). Every tokuten gets a paired items row with
 kind='tokuten_audio' so it surfaces in the Library grid alongside drama CDs;
 the dedicated /api/tokutens endpoints back the detail view + future game M:N
 links."""
+import json
 import logging
 import uuid
 from datetime import datetime
@@ -150,8 +151,10 @@ async def create_tokuten(payload: TokutenCreate):
         cur = await conn.execute(
             """INSERT INTO tokutens (kind, title, title_en, shop, shop_other_name,
                                      release_date, notes, source_url, local_path,
-                                     vndb_id, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                     vndb_id, seiyuu, seiyuu_en,
+                                     description, description_en,
+                                     created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 payload.kind,
                 payload.title,
@@ -163,6 +166,10 @@ async def create_tokuten(payload: TokutenCreate):
                 payload.source_url,
                 payload.local_path,
                 (payload.vndb_id or None),
+                json.dumps(payload.seiyuu or [], ensure_ascii=False),
+                json.dumps(payload.seiyuu_en or [], ensure_ascii=False),
+                payload.description,
+                payload.description_en,
                 now, now,
             ),
         )
@@ -192,6 +199,10 @@ async def update_tokuten(tokuten_id: int, payload: TokutenUpdate):
     fields = payload.model_dump(exclude_unset=True)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # List-valued fields are stored as JSON text (mirrors items.seiyuu).
+    for json_field in ("seiyuu", "seiyuu_en"):
+        if json_field in fields:
+            fields[json_field] = json.dumps(fields[json_field] or [], ensure_ascii=False)
     fields["updated_at"] = _now_iso()
     set_clause = ", ".join(f"{k} = ?" for k in fields.keys())
     params = list(fields.values()) + [tokuten_id]

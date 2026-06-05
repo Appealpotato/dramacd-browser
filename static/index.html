@@ -186,6 +186,9 @@
                                 <option value="melon">Melon</option>
                                 <option value="animate">Animate</option>
                                 <option value="stellaworth">Stellaworth</option>
+                                <option value="gamers">Gamers</option>
+                                <option value="chil_chil">Chil-Chil</option>
+                                <option value="vgmdb">VGMdb</option>
                                 <option value="physical">Physical</option>
                                 <option value="other">Other</option>
                             </select>
@@ -2984,6 +2987,48 @@
                             </div>
                             <div v-if="vndbSearchError" class="detail-edit-error">{{ vndbSearchError }}</div>
                         </div>
+                        <!-- External metadata fetch (Gamers / Chil-Chil) for
+                             manual drama CDs + tokutens. Paste a product URL
+                             or search by title; either path opens the preview
+                             modal with per-field apply checkboxes. -->
+                        <div v-if="selectedItem && (selectedItem.is_manual || selectedItem.kind === 'tokuten_audio')"
+                             class="meta-fetch-block">
+                            <div class="meta-fetch-row">
+                                <input type="text" v-model="metaFetchUrl"
+                                       placeholder="Paste a Gamers / Chil-Chil product URL…"
+                                       @keyup.enter="metaFetchFromUrl()">
+                                <button type="button" class="btn btn-secondary btn-sm"
+                                        @click="metaFetchFromUrl()" :disabled="metaFetchBusy || !metaFetchUrl.trim()">
+                                    {{ metaFetchBusy ? 'Fetching…' : 'Fetch' }}
+                                </button>
+                            </div>
+                            <div class="meta-fetch-row">
+                                <input type="text"
+                                       :value="metaSearchQuery"
+                                       @input="metaSearchInput($event.target.value)"
+                                       placeholder="…or search Gamers + Chil-Chil by title">
+                                <span v-if="metaSearching" class="vndb-search-spinner">…</span>
+                            </div>
+                            <div v-if="metaSearchResults.length" class="vndb-search-results meta-search-results">
+                                <button v-for="(r, ri) in metaSearchResults" :key="'meta-' + ri"
+                                        type="button"
+                                        class="vndb-result-row"
+                                        @click="metaPickSearchResult(r)">
+                                    <img v-if="r.thumbnail" :src="r.thumbnail" class="vndb-result-thumb" loading="lazy" referrerpolicy="no-referrer">
+                                    <div v-else class="vndb-result-thumb vndb-result-thumb-empty"></div>
+                                    <div class="vndb-result-meta">
+                                        <div class="vndb-result-title">{{ r.title }}</div>
+                                        <div class="vndb-result-sub">
+                                            <span class="meta-source-badge">{{ r.source === 'chil_chil' ? 'Chil-Chil' : 'Gamers' }}</span>
+                                            <span v-if="r.category">· {{ r.category }}</span>
+                                            <span v-if="r.release_date">· {{ r.release_date }}</span>
+                                            <span v-if="r.price">· {{ r.price }}</span>
+                                        </div>
+                                    </div>
+                                </button>
+                            </div>
+                            <div v-if="metaFetchError" class="detail-edit-error">{{ metaFetchError }}</div>
+                        </div>
                         <div class="detail-edit-grid">
                             <label class="detail-edit-field">
                                 <span class="detail-edit-label">Title (JP)</span>
@@ -3268,6 +3313,74 @@
                             <li v-for="f in parseJson(selectedItem.files)" :key="f">{{ f }}</li>
                         </ul>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Metadata fetch preview — sits above the item detail overlay.
+             Shows the normalized fetch result with per-field checkboxes;
+             only checked fields are written by POST /api/metadata/apply. -->
+        <div class="overlay meta-preview-overlay" v-if="metaPreview" @click.self="metaClosePreview">
+            <div class="meta-preview-panel">
+                <div class="meta-preview-head">
+                    <h3>Fetched from {{ metaPreview.source === 'chil_chil' ? 'Chil-Chil' : 'Gamers' }}</h3>
+                    <button class="btn btn-secondary btn-sm" @click="metaClosePreview">✕</button>
+                </div>
+                <div class="meta-preview-body">
+                    <div class="meta-preview-cover" v-if="metaPreview.cover_url">
+                        <img :src="metaPreview.cover_url" referrerpolicy="no-referrer" alt="cover">
+                    </div>
+                    <div class="meta-preview-fields">
+                        <label class="meta-preview-field" v-if="metaPreview.title">
+                            <input type="checkbox" v-model="metaPreviewFields.title">
+                            <span class="meta-preview-label">Title</span>
+                            <span class="meta-preview-value">{{ metaPreview.title }}</span>
+                        </label>
+                        <label class="meta-preview-field" v-if="metaPreview.release_date">
+                            <input type="checkbox" v-model="metaPreviewFields.release_date">
+                            <span class="meta-preview-label">Release</span>
+                            <span class="meta-preview-value">{{ metaPreview.release_date }}</span>
+                        </label>
+                        <label class="meta-preview-field" v-if="(metaPreview.seiyuu || []).length">
+                            <input type="checkbox" v-model="metaPreviewFields.seiyuu">
+                            <span class="meta-preview-label">Cast</span>
+                            <span class="meta-preview-value">{{ metaPreview.seiyuu.join('、') }}</span>
+                        </label>
+                        <label class="meta-preview-field" v-if="metaPreview.description">
+                            <input type="checkbox" v-model="metaPreviewFields.description">
+                            <span class="meta-preview-label">Description</span>
+                            <span class="meta-preview-value meta-preview-desc">{{ metaPreview.description }}</span>
+                        </label>
+                        <label class="meta-preview-field" v-if="metaPreview.cover_url">
+                            <input type="checkbox" v-model="metaPreviewFields.cover">
+                            <span class="meta-preview-label">Cover</span>
+                            <span class="meta-preview-value">download to library</span>
+                        </label>
+                        <label class="meta-preview-field"
+                               v-if="selectedItem && selectedItem.kind === 'tokuten_audio'">
+                            <input type="checkbox" v-model="metaPreviewFields.shop">
+                            <span class="meta-preview-label">Source tag</span>
+                            <span class="meta-preview-value">{{ metaPreview.source }}</span>
+                        </label>
+                        <label class="meta-preview-field"
+                               v-if="selectedItem && selectedItem.kind === 'tokuten_audio' && metaPreview.source_url">
+                            <input type="checkbox" v-model="metaPreviewFields.source_url">
+                            <span class="meta-preview-label">Source URL</span>
+                            <span class="meta-preview-value">{{ metaPreview.source_url }}</span>
+                        </label>
+                        <label class="meta-preview-field">
+                            <input type="checkbox" v-model="metaPreviewFields.source_note">
+                            <span class="meta-preview-label">Note stamp</span>
+                            <span class="meta-preview-value meta-preview-note">{{ metaNotePreview(metaPreview) }}</span>
+                        </label>
+                    </div>
+                </div>
+                <div v-if="metaApplyError" class="detail-edit-error">{{ metaApplyError }}</div>
+                <div class="detail-edit-actions">
+                    <button class="btn btn-secondary" @click="metaClosePreview" :disabled="metaApplyBusy">Cancel</button>
+                    <button class="btn btn-primary" @click="metaApply" :disabled="metaApplyBusy">
+                        {{ metaApplyBusy ? 'Applying…' : 'Apply selected' }}
+                    </button>
                 </div>
             </div>
         </div>

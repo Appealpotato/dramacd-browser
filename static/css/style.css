@@ -6252,3 +6252,121 @@ input[type="radio"]:disabled {
     background: color-mix(in srgb, var(--accent) 8%, transparent);
     z-index: 35;
 }
+
+/* === External metadata fetch (Gamers / Chil-Chil) ===
+   Fetch block inside the detail edit panel + the preview modal that shows
+   the normalized result with per-field apply checkboxes. */
+.meta-fetch-block {
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px;
+    margin-bottom: 12px;
+}
+.meta-fetch-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+}
+.meta-fetch-row + .meta-fetch-row {
+    margin-top: 6px;
+}
+.meta-fetch-row input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    padding: 6px 8px;
+    font-size: 12px;
+}
+.meta-search-results {
+    max-height: 280px;
+}
+.meta-source-badge {
+    display: inline-block;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 10px;
+    color: var(--text-dim);
+}
+/* Preview modal sits above the item detail overlay (z-index 200). */
+.meta-preview-overlay {
+    z-index: 300;
+    justify-content: center;
+    align-items: center;
+}
+.meta-preview-panel {
+    width: 560px;
+    max-width: 92vw;
+    max-height: 86vh;
+    overflow-y: auto;
+    background: var(--bg-modal);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.meta-preview-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+.meta-preview-head h3 {
+    margin: 0;
+    font-size: 14px;
+}
+.meta-preview-body {
+    display: flex;
+    gap: 12px;
+    min-width: 0;
+}
+.meta-preview-cover {
+    flex: 0 0 140px;
+}
+.meta-preview-cover img {
+    width: 100%;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+.meta-preview-fields {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.meta-preview-field {
+    display: grid;
+    grid-template-columns: auto 80px 1fr;
+    gap: 8px;
+    align-items: start;
+    font-size: 12px;
+    cursor: pointer;
+}
+.meta-preview-field input[type="checkbox"] {
+    margin-top: 2px;
+}
+.meta-preview-label {
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.meta-preview-value {
+    color: var(--text);
+    word-break: break-word;
+    min-width: 0;
+}
+.meta-preview-desc {
+    max-height: 110px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+}
+.meta-preview-note {
+    font-size: 11px;
+    color: var(--text-dim);
+}
