@@ -398,7 +398,8 @@ class OpenRouterTrackTranslator:
                 text = row.strip()
                 if text:
                     logger.warning(f"[OpenRouterTrackTranslator] Row {i} is string (no segment_index): {text[:100]}")
-                    # SKIP rows without segment_index - they can't be aligned to expected segments
+                    # Keep indexless rows; translation_job's alignment fallbacks map them positionally.
+                    rows.append({"text": text, "meta": {"provider": self.provider_label, "model": self.model}})
                 continue
             if not isinstance(row, dict):
                 logger.debug(f"[OpenRouterTrackTranslator] Skipping non-dict row {i}: {type(row).__name__}")
@@ -416,17 +417,16 @@ class OpenRouterTrackTranslator:
                     logger.warning(f"[OpenRouterTrackTranslator] Row {i} has non-int segment_index: {seg_idx}")
                     parsed_idx = None
 
-            # CRITICAL FIX: Only append rows that have a valid segment_index
-            if parsed_idx is None:
-                logger.warning(f"[OpenRouterTrackTranslator] Skipping row {i}: no valid segment_index found in {list(row.keys())}")
-                continue
-
             normalized = {
-                "segment_index": parsed_idx,  # Always include segment_index
                 "text": text,
                 "meta": {"provider": self.provider_label, "model": self.model},
             }
+            if parsed_idx is not None:
+                normalized["segment_index"] = parsed_idx
+            else:
+                # Keep indexless rows; translation_job's alignment fallbacks map them positionally.
+                logger.warning(f"[OpenRouterTrackTranslator] Row {i} has no valid segment_index, keys: {list(row.keys())} (kept for positional alignment)")
             rows.append(normalized)
 
-        logger.info(f"[OpenRouterTrackTranslator] Processed {len(rows)} rows with segment_index")
+        logger.info(f"[OpenRouterTrackTranslator] Processed {len(rows)} rows ({sum(1 for r in rows if 'segment_index' in r)} with segment_index)")
         return rows

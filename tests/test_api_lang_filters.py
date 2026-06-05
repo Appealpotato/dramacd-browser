@@ -298,13 +298,17 @@ class ApiSettingsTests(unittest.TestCase):
         self.app.include_router(api_router.router)
 
     def test_get_ai_settings(self):
-        with patch.object(api_router.db, "get_app_setting", AsyncMock(side_effect=[None, None, None])), \
+        with patch.object(api_router.db, "get_app_setting", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_gemini_api_key", AsyncMock(return_value="abc123")), \
              patch.object(api_router.db, "get_runtime_openrouter_api_key", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_chutes_api_key", AsyncMock(return_value=None)), \
+             patch.object(api_router.db, "get_runtime_openai_compat_api_key", AsyncMock(return_value=None)), \
+             patch.object(api_router.db, "get_runtime_openai_compat_base_url", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_gemini_model", AsyncMock(return_value="gemini-2.0-flash")), \
              patch.object(api_router.db, "get_runtime_openrouter_model", AsyncMock(return_value="openrouter/auto")), \
              patch.object(api_router.db, "get_runtime_chutes_model", AsyncMock(return_value="deepseek-ai/DeepSeek-V3.1")), \
+             patch.object(api_router.db, "get_runtime_openai_compat_model", AsyncMock(return_value=None)), \
+             patch.object(api_router.db, "get_runtime_openai_compat_request_format", AsyncMock(return_value="openai")), \
              patch.object(api_router.db, "get_runtime_translation_provider", AsyncMock(return_value="gemini")):
             with TestClient(self.app) as client:
                 resp = client.get("/api/settings/ai")
