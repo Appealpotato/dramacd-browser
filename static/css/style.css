@@ -1807,10 +1807,13 @@ select, .filter-select {
     margin: 0 auto;
     /* Extra breathing space on the left so the sidebar isn't flush against
        the window edge, and a wider gap between sidebar and library so the
-       two columns feel distinct rather than glued together. */
+       two columns feel distinct rather than glued together.
+       minmax(0, ...) on both tracks lets the columns actually shrink at
+       larger zoom levels — without it the sidebar's 280px floor + library
+       content force horizontal overflow that overlaps adjacent UI. */
     padding: 14px 16px 16px 24px;
     display: grid;
-    grid-template-columns: 350px 1fr;
+    grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr); /* lets each column scroll independently */
     gap: 20px;
     height: 100%;
@@ -1818,7 +1821,8 @@ select, .filter-select {
 }
 
 .control-column {
-    width: var(--sidebar-width, 280px);
+    width: 100%;
+    min-width: 0;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -1835,9 +1839,14 @@ select, .filter-select {
 
 /* Without this, flex shrinks each section to fit the column → content
    collectively "fits" so overflow-y never engages, and inner content visually
-   overlaps because each section's frame is smaller than its actual content. */
+   overlaps because each section's frame is smaller than its actual content.
+   min-width: 0 paired with the parent's minmax(0, ...) grid track lets the
+   sections actually narrow when the sidebar shrinks (browser zoom, ≤1080px
+   breakpoint, etc.) instead of forcing their contents to overflow sideways. */
 .control-column > * {
     flex-shrink: 0;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .library-column {
@@ -2233,6 +2242,44 @@ select, .filter-select {
     background: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
+/* Drama-CD listen-status pill — same shape language as .game-status-pill so
+   the two surfaces feel like the same control. State colors mirror play-
+   status: active=accent, completed=success, on_hold=warning, dropped=muted. */
+.listen-status-pill {
+    display: inline-block;
+    text-transform: capitalize;
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    background: var(--bg-input);
+    color: var(--text-muted);
+}
+.listen-status-pill.listen-listening {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.listen-status-pill.listen-completed {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+.listen-status-pill.listen-dropped {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+.listen-status-pill.listen-on_hold {
+    color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+.listen-status-pill.clickable {
+    cursor: pointer;
+    transition: filter 0.12s, transform 0.12s;
+}
+.listen-status-pill.clickable:hover {
+    filter: brightness(1.08);
+}
+
 /* Flex row that holds the play-status pill + platform pill on game cards. */
 .card-meta-row {
     display: flex;
@@ -2569,6 +2616,25 @@ select, .filter-select {
     cursor: default;
     margin-bottom: 3px;
     max-width: 100%;
+}
+/* Audio-on-disk indicator next to the CD title. Same 8px accent dot as
+   the library card's ready-dot; hollow when the audio isn't extracted
+   (or its files were cleaned off disk). */
+.workshop-audio-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: 1px;
+    flex: 0 0 auto;
+}
+.workshop-audio-dot.on {
+    background: var(--accent);
+}
+.workshop-audio-dot.off {
+    background: transparent;
+    border: 1.5px solid var(--accent-dim);
 }
 .workshop-meta-label {
     color: var(--text-muted);
@@ -4711,6 +4777,38 @@ input[type="radio"]:disabled {
     background: var(--bg-hover);
     border-color: var(--accent);
     transform: translateY(-1px);
+}
+
+/* Track row whose audio file is gone from disk (DB row outlived the
+   extracted files). Dimmed; clicking surfaces a "re-extract" toast
+   instead of loading a player that can't play. */
+.player-track-item.track-missing {
+    opacity: 0.55;
+}
+.player-track-item.track-missing:hover {
+    border-color: var(--border);
+    transform: none;
+}
+.track-missing-pill {
+    color: #e0a23f;
+}
+
+/* Banner above the track list when some/all audio files are missing on
+   disk. Amber, not red — it's a "next step" prompt, not a failure. */
+.player-missing-audio-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(224, 162, 63, 0.45);
+    border-radius: 6px;
+    background: rgba(224, 162, 63, 0.08);
+    color: #e0a23f;
+    font-size: 0.82rem;
+}
+.player-missing-audio-banner svg {
+    flex: 0 0 auto;
 }
 
 .player-track-main {

@@ -193,6 +193,8 @@ async def import_payload(payload: dict, replace_existing: bool = False) -> dict:
     summary = {
         "items_seen": 0,
         "items_matched": 0,
+        "items_created": 0,
+        "metadata_applied": 0,
         "items_skipped_missing": [],
         "tracks_matched": 0,
         "tracks_skipped_missing": [],
@@ -210,12 +212,31 @@ async def import_payload(payload: dict, replace_existing: bool = False) -> dict:
             summary["errors"].append("Item entry missing product_code; skipped")
             continue
 
+        item_metadata = item_payload.get("metadata")
         item = await db.get_item_by_product_code(product_code)
+        if not item and item_metadata:
+            # A producer package brought prefetched DLsite metadata for a work the library
+            # doesn't have yet: create the item so metadata (and, once its archive is
+            # extracted, transcripts) have somewhere to land.
+            try:
+                await db.upsert_item({**item_metadata, "product_code": product_code})
+                item = await db.get_item_by_product_code(product_code)
+                summary["items_created"] = summary.get("items_created", 0) + 1
+            except Exception as exc:  # noqa: BLE001
+                summary["errors"].append(f"create item {product_code} failed: {exc}")
         if not item:
             summary["items_skipped_missing"].append(product_code)
             continue
         summary["items_matched"] += 1
         item_id = int(item["id"])
+
+        if item_metadata:
+            # Apply prefetched metadata so the library never has to hit DLsite itself.
+            try:
+                await db.update_item_metadata(product_code, item_metadata)
+                summary["metadata_applied"] = summary.get("metadata_applied", 0) + 1
+            except Exception as exc:  # noqa: BLE001
+                summary["errors"].append(f"metadata for {product_code} failed: {exc}")
 
         db_tracks = await db.get_pipeline_tracks(item_id)
         tracks_payload = item_payload.get("tracks") or []

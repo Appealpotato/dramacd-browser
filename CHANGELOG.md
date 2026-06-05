@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-05-30 — `.tar` support + nested-tar viewer drill-down
+
+### Archive formats
+- **`.tar` is now a first-class archive format** alongside `.zip`/`.rar`/`.7z`. `config.ARCHIVE_EXTENSIONS` picks tarballs up at scan time; `pipeline/extractor._safe_extract_tar` unpacks them in-process via the Python stdlib's `tarfile` (no 7z binary needed — mirrors how `.zip` is handled). Path-traversal entries (`../escape.txt`), symlinks, and device members are skipped; only regular files and directories get written. `tarfile.open(... "r:*")` so a misnamed `.tar.gz/bz2/xz` still opens.
+- `get_runtime_archive_support()` now reports `tar` whenever 7z does or doesn't.
+- File-picker filter strings in `routers/api.py` and the three bulk/browse callers in `static/js/app.js` include `*.tar`. Manual-item archive-path hint in `static/index.html` updated to `.7z / .zip / .rar / .tar`.
+
+### Inline archive viewer — transparent nested-tar drill-down
+- DLsite's common layout — a single `RJ<code>.tar` packed inside `RJ<code>.7z` (or `.rar`/`.zip`) for compression — used to surface as one useless `RJ<code>.tar` row in the Workshop Archive panel with no way to drill in. `list_archive_contents` now detects this single-tar-wrapper shape (`_find_single_inner_tar`) and surfaces the tar's contents in place of the wrapper's listing.
+- Streaming the inner tar uses `zipfile.open` for `.zip` wrappers and `7z e -so` piped into a `tarfile` in `r|*` stream mode for `.rar`/`.7z`. The 7z subprocess is `terminate`d cleanly when callers break early (e.g. once the target member is found in `stream_archive_file`) so it doesn't hang on a full stdout pipe.
+- `stream_archive_file` (powers `/archive-thumb`) drills the same way — image thumbnails can be pulled out of the nested tar.
+- **Listing cache** at `data/pipeline/archive-listings/{sha1(path)}.json`, keyed on outer-archive size + mtime, JSON shape `{v, size, mtime, wrapper_tar, files}`. Written only for the expensive nested-tar case (plain top-level listings via `7z l` are already fast). Cold list of a 1.2 GB → 1.9 GB nested archive ≈ 5 s; warm reads instant. Auto-invalidates when the outer file changes.
+- Plain non-nested `.zip`/`.rar`/`.7z` behavior is unchanged.
+
 ## 2026-05-12 — Games wing polish round (migrations 015–022)
 
 ### Migrations

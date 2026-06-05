@@ -5,7 +5,7 @@ Local browser for drama CD archives with DLsite metadata, on-device transcriptio
 ## What it does
 
 - **Library** — scans your archive folder, fetches DLsite metadata, lets you browse with seiyuu/tag/format filters, multi-select cards.
-- **Workshop** — extracts archives (zip/rar/7z), transcribes audio with Faster Whisper, runs LLM translation (Gemini / OpenRouter / Chutes / any OpenAI-compatible endpoint, including Claude proxies that speak the Anthropic Messages format).
+- **Workshop** — extracts archives (zip / rar / 7z / tar, including the common DLsite layout of a single tar packed inside a 7z), transcribes audio with Faster Whisper, runs LLM translation (Gemini / OpenRouter / Chutes / any OpenAI-compatible endpoint, including Claude proxies that speak the Anthropic Messages format).
 - **Player** — Spotify-style synchronized lyrics player. Picks up the active transcript + translation for a track and follows along with playback. Live codec/variant switching during playback.
 - **Track grouping** — FLAC, MP3, WAV, AIFF, ... of the same recording, plus SFX vs no-SFX/voice-only mixes, all collapse into one row. Transcript runs replicate automatically to every sibling so you never re-run Whisper on the MP3 of something you already did in FLAC.
 
@@ -15,7 +15,7 @@ Local browser for drama CD archives with DLsite metadata, on-device transcriptio
 - Vue 3 (CDN, no build step)
 - Faster Whisper (GPU/CPU)
 - ffmpeg + ffprobe for audio I/O
-- 7z for rar/7z archives
+- 7z for rar/7z archives (zip and tar handled in-process via the Python stdlib — no external dep)
 
 ## Run
 
@@ -34,7 +34,7 @@ Pipeline features (extraction, transcription, translation, player) are gated beh
 |---|---|
 | `DRAMACD_FFMPEG_PATH` | absolute path to `ffmpeg.exe` (Windows) — required for transcription |
 | `DRAMACD_FFPROBE_PATH` | absolute path to `ffprobe.exe` — for richer audio metadata |
-| `DRAMACD_7Z_PATH` | absolute path to `7z` — required for rar/7z extraction |
+| `DRAMACD_7Z_PATH` | absolute path to `7z` — required for rar/7z extraction, and for drilling into a `.tar` packed inside a `.rar`/`.7z` wrapper. Plain `.zip` and standalone `.tar` don't need it. |
 
 ### Server / scan
 | Variable | Default | Purpose |
@@ -103,8 +103,8 @@ Every mutating endpoint accepts the API key. `?dry_run=true` previews destructiv
 - `POST /api/pipeline/items/{id}/extract`, `GET /api/pipeline/items/{id}/extract/status`
 - `GET /api/pipeline/items/{id}/tracks` — flat track list
 - **`GET /api/pipeline/items/{id}/track-groups`** — tracks collapsed into recording-groups (codec + variant siblings)
-- **`GET /api/pipeline/items/{id}/archive-contents`** — read-only list of files inside the source archive(s), used by the Workshop Archive panel's inline viewer
-- **`GET /api/pipeline/items/{id}/archive-thumb?path=<inner-path>`** — extracts a single image from the archive and serves a Pillow-thumbnailed JPEG (cached on disk under `data/pipeline/archive-thumbs/`)
+- **`GET /api/pipeline/items/{id}/archive-contents`** — read-only list of files inside the source archive(s), used by the Workshop Archive panel's inline viewer. If the archive is just a single `.tar` wrapped in a `.zip`/`.rar`/`.7z` (common DLsite layout), the viewer transparently drills into the nested tar and returns its contents instead of the useless one-entry wrapper listing. That walk is cached on disk under `data/pipeline/archive-listings/{sha1(path)}.json` (keyed on size + mtime) so subsequent loads are instant.
+- **`GET /api/pipeline/items/{id}/archive-thumb?path=<inner-path>`** — extracts a single image from the archive and serves a Pillow-thumbnailed JPEG (cached on disk under `data/pipeline/archive-thumbs/`). Drills through nested-tar wrappers via the same path the contents listing uses.
 - `POST /api/pipeline/items/{id}/autopilot` — full per-CD pipeline (metadata → extract → titles → transcribe → translate)
 - `POST /api/pipeline/items/{id}/auto-transcribe` — body `{track_ids?, language, force}` (model now read from runtime settings)
 - `POST /api/pipeline/items/{id}/translate-track-names`
@@ -155,7 +155,7 @@ Three tabs in the workspace, plus an API tab for settings:
 - **Library** — card grid. Click a card → detail pane. Ctrl/Cmd+click → toggle multi-select (selected cards get a pink-bordered glow). Hover-revealed Send-to-Workshop button bottom-right of each card. Kebab menu in the bulk bar for batch actions; bottom of the menu is a 4-icon row for pipeline shortcuts (extract / transcribe / translate / full workflow).
 - **Workshop** — sticks one item in focus.
   - **Top**: persistent autocomplete search bar (FTS5 prefix-match across title/code/seiyuu/tags) → compact CD card (cover + title + circle + voice actors + DLsite code + track count with manual override pencil).
-  - **Archive panel**: icon-only header (list/grid view toggle, extract, force re-extract toggle, open folder, purge audio with inline confirm, export kebab with 3 hardcoded presets — AS Release / Subtitles Only / Full Package). Body is an inline archive viewer with collapsible folder grouping (list view) or breadcrumbed file-explorer style with image thumbnails (grid view).
+  - **Archive panel**: icon-only header (list/grid view toggle, extract, force re-extract toggle, open folder, purge audio with inline confirm, export kebab with 3 hardcoded presets — AS Release / Subtitles Only / Full Package). Body is an inline archive viewer with collapsible folder grouping (list view) or breadcrumbed file-explorer style with image thumbnails (grid view). Handles `.zip`/`.rar`/`.7z`/`.tar`, and transparently unwraps the single-tar-inside-7z layout DLsite ships.
   - **Transcription**: track grid with select-all/clear and language picker in the header row.
   - **Track Selection**: header icons for translate track names, fill missing summaries, regenerate all summaries.
   - **Transcript & Translation Management**: cards for each transcript/translation run. Click a card to select (sets active + binds as TL source). Lucide eye/trash icons; trash uses an inline ✓/✗ confirm. Run IDs hidden — cards show `language · N segments · model · relative time`.

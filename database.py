@@ -9,6 +9,7 @@ from config import (
     DB_PATH,
     SCAN_PATH,
     COVERS_DIR,
+    PIPELINE_EXTRACT_DIR,
     ENABLE_PIPELINE,
     GEMINI_API_KEY,
     GEMINI_MODEL,
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS items (
     favorite INTEGER DEFAULT 0,
     notes TEXT DEFAULT '',
     translation_status TEXT DEFAULT 'not_translated',
+    listen_status TEXT NOT NULL DEFAULT 'backlog',
     files TEXT DEFAULT '[]',
     file_count INTEGER DEFAULT 1,
     total_size INTEGER DEFAULT 0,
@@ -399,6 +401,7 @@ MIGRATION_IDS = [
     "022_add_extra_library_paths",
     "023_add_items_glossary",
     "024_backfill_tokuten_titles_from_items",
+    "025_add_items_listen_status",
 ]
 
 # Migrations whose first run should trigger an on-disk backup of library.db.
@@ -1141,6 +1144,19 @@ async def _migration_023_add_items_glossary(db: aiosqlite.Connection):
         )
 
 
+async def _migration_025_add_items_listen_status(db: aiosqlite.Connection):
+    """Personal listening-progress tracker for drama CDs — mirrors
+    games.play_status. No CHECK constraint (items has none on translation_status
+    either); the API layer validates against _DRAMA_CD_LISTEN_STATUSES."""
+    if not await _column_exists(db, "items", "listen_status"):
+        await db.execute(
+            "ALTER TABLE items ADD COLUMN listen_status TEXT NOT NULL DEFAULT 'backlog'"
+        )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_items_listen_status ON items(listen_status)"
+    )
+
+
 async def _migration_024_backfill_tokuten_titles_from_items(db: aiosqlite.Connection):
     """Pre-fix: items PUT didn't mirror title onto the linked tokutens row, so
     manual tokutens edited via the items detail panel kept the
@@ -1376,6 +1392,7 @@ MIGRATION_HANDLERS = {
     "022_add_extra_library_paths": _migration_022_add_extra_library_paths,
     "023_add_items_glossary": _migration_023_add_items_glossary,
     "024_backfill_tokuten_titles_from_items": _migration_024_backfill_tokuten_titles_from_items,
+    "025_add_items_listen_status": _migration_025_add_items_listen_status,
 }
 
 
@@ -2068,6 +2085,17 @@ async def update_item_metadata(product_code: str, metadata: dict):
         now = datetime.now().isoformat()
         seiyuu_jp = _safe_json_list(metadata.get("seiyuu", []))
         seiyuu_en = _safe_json_list(metadata.get("seiyuu_en", []))
+        # Reuse romanizations the library already knows. DLsite often gives no
+        # English voice-actor spelling, so the scraper stores seiyuu_en as a
+        # copy of the JP names; fill any such slot from a name we've already
+        # romanized elsewhere (exact JP match) so imports don't lose the
+        # romanization we worked out before.
+        if seiyuu_jp:
+            romaji_map = await _build_seiyuu_romanization_map(db)
+            if romaji_map:
+                filled_en, _filled = _fill_known_romanizations(seiyuu_jp, seiyuu_en, romaji_map)
+                if _filled:
+                    seiyuu_en = filled_en
         tags_jp = _safe_json_list(metadata.get("tags", []))
         tags_en = _safe_json_list(metadata.get("tags_en", []))
         await db.execute(
@@ -2117,6 +2145,61 @@ async def update_item_metadata(product_code: str, metadata: dict):
         await db.close()
 
 
+async def set_item_is_manual(product_code: str, value: bool = True) -> None:
+    """Flag (or unflag) an item as a manual / non-DLsite custom entry. Manual items
+    are skipped by the DLsite metadata-fetch job (see run_fetch_metadata), so their
+    bundled metadata is never clobbered by a doomed DLsite lookup."""
+    db = await get_db()
+    try:
+        await db.execute(
+            "UPDATE items SET is_manual = ?, updated_at = ? WHERE product_code = ?",
+            (1 if value else 0, datetime.now().isoformat(), product_code),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+def _basename_lower(p) -> str:
+    """Separator-agnostic, lowercased basename (items store DLsite files as basenames but
+    manual entries store full paths; normalize both for comparison)."""
+    return str(p or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
+
+
+async def get_all_claimed_basenames() -> set[str]:
+    """Basenames of every file already claimed by an item. The scanner uses this to keep
+    files that belong to an existing entry (especially manual/custom MAN-* items) out of
+    the unmatched list and out of the per-scan bundled-package peek."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT files FROM items WHERE files IS NOT NULL AND files != '[]'")
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    out: set[str] = set()
+    for row in rows:
+        try:
+            for f in json.loads(row[0] or "[]"):
+                if f:
+                    out.add(_basename_lower(f))
+        except Exception:
+            continue
+    return out
+
+
+async def get_unmatched_file_keys() -> set[tuple[str, int]]:
+    """(filepath_lower, file_size) for every currently-recorded unmatched file. Snapshotted
+    before a rescan so an already-seen, package-less archive isn't re-peeked every time -
+    only genuinely new files (never seen, not owned by an item) get the bundled-package peek."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT filepath, file_size FROM unmatched_files")
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    return {(str(fp or "").lower(), int(sz or 0)) for fp, sz in rows}
+
+
 async def update_item_user_data(item_id: int, data: dict):
     """Patch any subset of mutable item fields. Covers both pure user-data
     (rating/favorite/notes/custom_tags) and the metadata fields the user can
@@ -2133,6 +2216,7 @@ async def update_item_user_data(item_id: int, data: dict):
             "rating", "favorite", "notes",
             "title", "title_en", "circle", "release_date", "age_rating",
             "description", "description_en",
+            "listen_status",
         }
         json_allowed = {
             "custom_tags", "seiyuu", "seiyuu_en", "tags", "tags_en",
@@ -2143,7 +2227,7 @@ async def update_item_user_data(item_id: int, data: dict):
         # Virtual field: `archive_path` — an absolute path on disk for a
         # manual item. We translate it into items.files=[abs_path] plus
         # derived total_size / file_count / file_format columns. Manual items
-        # use this to point at a .7z/.zip/.rar the scanner wouldn't have
+        # use this to point at a .7z/.zip/.rar/.tar the scanner wouldn't have
         # picked up. The extractor's archive resolver treats absolute-path
         # entries in items.files as direct hits.
         if "archive_path" in data and data["archive_path"] is not None:
@@ -2182,6 +2266,11 @@ async def update_item_user_data(item_id: int, data: dict):
 
         for key, val in data.items():
             if key in scalar_allowed:
+                if key == "listen_status":
+                    if val is None or val == "":
+                        val = "backlog"
+                    if val not in _DRAMA_CD_LISTEN_STATUSES:
+                        raise ValueError(f"Invalid listen_status: {val!r}")
                 fields.append(f"{key} = ?")
                 values.append(val)
             elif key in json_allowed:
@@ -2403,6 +2492,7 @@ async def get_all_items(
     has_metadata=None, confidence=None, lang="jp",
     include_tokutens=False, only_tokutens=False,
     is_manual=None,
+    listen_status=None, listen_statuses=None,
     tokuten_kind=None, tokuten_source=None,
     limit=500, offset=0
 ) -> list[dict]:
@@ -2454,7 +2544,9 @@ async def get_all_items(
                                   AND s.name LIKE ?
                             )"""
                         )
-                query += " AND (" + " OR ".join(clauses) + ")"
+                # AND between terms — picking "Yuki Kaji" + "Mamoru Miyano"
+                # returns CDs that feature BOTH, not either.
+                query += " AND (" + " AND ".join(clauses) + ")"
                 for term in seiyuu_terms:
                     params.append(f"%{term}%")
         if tag:
@@ -2487,7 +2579,9 @@ async def get_all_items(
                                   AND t.name LIKE ?
                             )"""
                         )
-                query += " AND (" + " OR ".join(tag_clauses) + ")"
+                # AND between tags — Binaural + Boy returns CDs tagged with
+                # BOTH (intersection), not either (union).
+                query += " AND (" + " AND ".join(tag_clauses) + ")"
                 for term in tag_terms:
                     params.append(f"%{term}%")
         if custom_tag:
@@ -2519,6 +2613,17 @@ async def get_all_items(
             query += " AND items.is_manual = 1"
         elif is_manual is False:
             query += " AND items.is_manual = 0"
+        # listen_status: multi-value form takes precedence (for stat-pill
+        # filtering), falls back to single-value query param.
+        if listen_statuses:
+            valid_listen = [s for s in listen_statuses if s in _DRAMA_CD_LISTEN_STATUSES]
+            if valid_listen:
+                placeholders = ",".join(["?"] * len(valid_listen))
+                query += f" AND items.listen_status IN ({placeholders})"
+                params.extend(valid_listen)
+        elif listen_status and listen_status in _DRAMA_CD_LISTEN_STATUSES:
+            query += " AND items.listen_status = ?"
+            params.append(listen_status)
         # Tokutens-subtab-only filters. items.tokuten_id is the join key;
         # use an EXISTS so we don't introduce row multiplication and so
         # drama-CD items aren't accidentally matched.
@@ -2546,6 +2651,7 @@ async def get_all_items(
             "product_code",
             "confidence",
             "translation_status",
+            "listen_status",
         }
         if sort not in valid_sorts:
             sort = "scan_date"
@@ -2746,6 +2852,184 @@ async def set_item_english_metadata(
         cursor = await db.execute("SELECT * FROM items WHERE id = ?", (item_id,))
         updated = await cursor.fetchone()
         return dict(updated) if updated else None
+    finally:
+        await db.close()
+
+
+# CJK detection: Hiragana, Katakana, the kana punctuation block, CJK Unified
+# Ideographs (+ Extension A), and the fullwidth/halfwidth forms block. A string
+# containing any of these is treated as a raw JP name, not a Latin romanization.
+_CJK_RE = re.compile(
+    "[　-〿"   # CJK symbols & punctuation (incl. ideographic space)
+    "぀-ヿ"    # Hiragana + Katakana
+    "㐀-䶿"    # CJK Unified Ideographs Extension A
+    "一-鿿"    # CJK Unified Ideographs
+    "＀-￯]"   # Halfwidth & Fullwidth Forms
+)
+
+
+def _is_real_romanization(en, jp=None) -> bool:
+    """True when ``en`` looks like an actual Latin-script romanization rather
+    than a copy of the JP name. The importer stores seiyuu_en as a copy of the
+    JP names when DLsite's EN page carries no English voice-actor spelling, so
+    we reject anything that still contains CJK characters or simply equals the
+    JP counterpart."""
+    if not isinstance(en, str):
+        return False
+    en = en.strip()
+    if not en or _CJK_RE.search(en):
+        return False
+    if jp is not None and isinstance(jp, str) and en == jp.strip():
+        return False
+    return True
+
+
+async def _build_seiyuu_romanization_map(db: aiosqlite.Connection) -> dict[str, str]:
+    """Map exact JP seiyuu name -> a known EN romanization, harvested from the
+    rest of the library. Two sources, in increasing priority:
+
+      1. Positionally-paired ``items.seiyuu`` / ``items.seiyuu_en`` where the EN
+         slot is a real romanization. When several romanizations exist for one
+         JP name the most frequently used wins (alphabetical tiebreak keeps it
+         deterministic).
+      2. The user-curated ``seiyuu_aliases`` table (canonical_jp ->
+         canonical_en), which always overrides the harvested guess.
+
+    Keys are matched exactly (case-sensitive) so two distinct people can never
+    be conflated."""
+    counts: dict[str, dict[str, int]] = {}
+    cursor = await db.execute(
+        """SELECT seiyuu, seiyuu_en FROM items
+           WHERE seiyuu IS NOT NULL AND seiyuu_en IS NOT NULL
+             AND seiyuu != '[]' AND seiyuu_en != '[]'"""
+    )
+    for row in await cursor.fetchall():
+        try:
+            jp = json.loads(row["seiyuu"] or "[]")
+            en = json.loads(row["seiyuu_en"] or "[]")
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(jp, list) or not isinstance(en, list):
+            continue
+        if len(jp) != len(en):
+            continue  # can't safely pair when lengths differ
+        for jp_name, en_name in zip(jp, en):
+            if not isinstance(jp_name, str) or not isinstance(en_name, str):
+                continue
+            jp_name = jp_name.strip()
+            en_name = en_name.strip()
+            if not jp_name or not _is_real_romanization(en_name, jp_name):
+                continue
+            bucket = counts.setdefault(jp_name, {})
+            bucket[en_name] = bucket.get(en_name, 0) + 1
+
+    mapping: dict[str, str] = {}
+    for jp_name, variants in counts.items():
+        best = sorted(variants.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+        mapping[jp_name] = best
+
+    # Curated aliases override harvested guesses (may not exist on old DBs).
+    try:
+        cursor = await db.execute(
+            "SELECT canonical_jp, canonical_en FROM seiyuu_aliases "
+            "WHERE canonical_jp IS NOT NULL AND TRIM(canonical_jp) != ''"
+        )
+        for row in await cursor.fetchall():
+            jp_name = (row["canonical_jp"] or "").strip()
+            en_name = (row["canonical_en"] or "").strip()
+            if jp_name and _is_real_romanization(en_name, jp_name):
+                mapping[jp_name] = en_name
+    except Exception:
+        pass
+
+    return mapping
+
+
+def _fill_known_romanizations(seiyuu_jp: list, seiyuu_en, romaji_map: dict) -> tuple[list, int]:
+    """Return a seiyuu_en list aligned to ``seiyuu_jp`` where every slot that is
+    missing or is just a JP copy gets filled from ``romaji_map`` on an exact JP
+    match. Slots that already hold a real romanization are left untouched.
+    Returns ``(new_en_list, filled_count)``."""
+    seiyuu_en = list(seiyuu_en or [])
+    filled = 0
+    out: list[str] = []
+    for idx, jp_name in enumerate(seiyuu_jp):
+        current = seiyuu_en[idx].strip() if idx < len(seiyuu_en) and isinstance(seiyuu_en[idx], str) else ""
+        if _is_real_romanization(current, jp_name):
+            out.append(current)
+            continue
+        known = romaji_map.get(jp_name.strip()) if isinstance(jp_name, str) else None
+        if known:
+            out.append(known)
+            filled += 1
+        else:
+            # Preserve whatever was there (JP copy or empty) so nothing is lost.
+            out.append(current or (jp_name if isinstance(jp_name, str) else ""))
+    return out, filled
+
+
+async def backfill_seiyuu_romanizations(dry_run: bool = True) -> dict:
+    """Sweep every item and fill seiyuu_en slots that are missing or are JP
+    copies using romanizations already known elsewhere in the library (exact
+    JP match). When ``dry_run`` is False the changes are written to
+    ``items.seiyuu_en`` and the normalized ``item_seiyuu`` rows are refreshed.
+    Returns a summary plus a per-item preview."""
+    db = await get_db()
+    try:
+        romaji_map = await _build_seiyuu_romanization_map(db)
+        preview: list[dict] = []
+        items_changed = 0
+        names_filled = 0
+        if romaji_map:
+            cursor = await db.execute(
+                """SELECT id, product_code, title, title_en, seiyuu, seiyuu_en,
+                          tags, tags_en, custom_tags
+                   FROM items
+                   WHERE seiyuu IS NOT NULL AND seiyuu != '[]'"""
+            )
+            rows = await cursor.fetchall()
+            now = datetime.now().isoformat()
+            for row in rows:
+                seiyuu_jp = _safe_json_list(row["seiyuu"])
+                if not seiyuu_jp:
+                    continue
+                seiyuu_en = _safe_json_list(row["seiyuu_en"])
+                new_en, filled = _fill_known_romanizations(seiyuu_jp, seiyuu_en, romaji_map)
+                if not filled:
+                    continue
+                items_changed += 1
+                names_filled += filled
+                if len(preview) < 200:
+                    preview.append({
+                        "item_id": row["id"],
+                        "product_code": row["product_code"],
+                        "title": row["title_en"] or row["title"],
+                        "before": seiyuu_en,
+                        "after": new_en,
+                    })
+                if not dry_run:
+                    await db.execute(
+                        "UPDATE items SET seiyuu_en = ?, updated_at = ? WHERE id = ?",
+                        (json.dumps(new_en, ensure_ascii=False), now, row["id"]),
+                    )
+                    await _refresh_metadata_index_for_item(
+                        db,
+                        row["id"],
+                        seiyuu_jp=seiyuu_jp,
+                        seiyuu_en=new_en,
+                        tags_jp=_safe_json_list(row["tags"]),
+                        tags_en=_safe_json_list(row["tags_en"]),
+                        custom_tags=_safe_json_list(row["custom_tags"]),
+                    )
+            if not dry_run and items_changed:
+                await db.commit()
+        return {
+            "dry_run": dry_run,
+            "known_names": len(romaji_map),
+            "items_changed": items_changed,
+            "names_filled": names_filled,
+            "preview": preview,
+        }
     finally:
         await db.close()
 
@@ -3069,7 +3353,7 @@ async def delete_item_by_id(item_id: int) -> bool:
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT cover_local, kind, tokuten_id FROM items WHERE id = ?",
+            "SELECT cover_local, kind, tokuten_id, product_code FROM items WHERE id = ?",
             (item_id,),
         )
         row = await cursor.fetchone()
@@ -3083,6 +3367,25 @@ async def delete_item_by_id(item_id: int) -> bool:
             except Exception:
                 pass  # Ignore file deletion errors
 
+        # Collect this item's extracted-audio folder(s) so we can remove them after the
+        # DB rows are gone - otherwise a deleted item leaves orphaned extracted/<CODE>/
+        # dirs on disk that a re-add would then "reuse" (stale tracks). Use the paths the
+        # tracks actually recorded, plus the canonical extracted/<CODE> location.
+        extract_dirs: set[str] = set()
+        try:
+            ec = await db.execute(
+                "SELECT DISTINCT extract_root FROM pipeline_tracks WHERE item_id = ? AND extract_root IS NOT NULL",
+                (item_id,),
+            )
+            for er in await ec.fetchall():
+                if er["extract_root"]:
+                    extract_dirs.add(er["extract_root"])
+        except Exception:
+            pass
+        code = (row["product_code"] if row else None) or ""
+        if code.strip():
+            extract_dirs.add(str(PIPELINE_EXTRACT_DIR / code.strip().upper()))
+
         await db.execute("DELETE FROM items WHERE id = ?", (item_id,))
 
         if row and row["kind"] == "tokuten_audio" and row["tokuten_id"]:
@@ -3094,6 +3397,22 @@ async def delete_item_by_id(item_id: int) -> bool:
             await db.execute("DELETE FROM tokutens WHERE id = ?", (tokuten_id,))
 
         await db.commit()
+
+        # Remove the extracted audio folder(s) now that the rows are gone. Safety: only
+        # delete paths that resolve INSIDE PIPELINE_EXTRACT_DIR, so a malformed
+        # extract_root can never rmtree something outside the pipeline workspace.
+        try:
+            base = PIPELINE_EXTRACT_DIR.resolve()
+        except Exception:
+            base = PIPELINE_EXTRACT_DIR
+        for d in extract_dirs:
+            try:
+                p = Path(d).resolve()
+                if p != base and base in p.parents and p.exists():
+                    shutil.rmtree(p, ignore_errors=True)
+                    logger.info(f"Removed extracted folder for deleted item {item_id}: {p}")
+            except Exception as exc:
+                logger.warning(f"Could not remove extracted folder {d} for item {item_id}: {exc}")
         return True
     except Exception as e:
         logger.error(f"Failed to delete item {item_id}: {e}")
@@ -3124,6 +3443,12 @@ async def get_stats() -> dict:
         )
         statuses = {row["translation_status"]: row["cnt"] for row in await status_cursor.fetchall()}
 
+        listen_cursor = await db.execute(
+            """SELECT listen_status, COUNT(*) as cnt FROM items
+               WHERE kind = 'drama_cd' GROUP BY listen_status"""
+        )
+        listen_statuses = {row["listen_status"]: row["cnt"] for row in await listen_cursor.fetchall()}
+
         return {
             "total_items": total,
             "with_metadata": with_metadata,
@@ -3131,6 +3456,7 @@ async def get_stats() -> dict:
             "favorites": favorites,
             "unmatched_files": unmatched,
             "translation_statuses": statuses,
+            "listen_statuses": listen_statuses,
         }
     finally:
         await db.close()
@@ -3479,6 +3805,23 @@ async def replace_pipeline_tracks_for_item(item_id: int, tracks: list[dict]) -> 
         await db.close()
     await recompute_translation_status_for_item(item_id)
     return upserted
+
+
+async def get_all_pipeline_track_paths() -> list[dict]:
+    """Every track's (extract_root, track_path) across ALL items, regardless
+    of item kind. Used by the workspace-orphan scan — routing that scan
+    through get_all_items() once silently dropped tokuten/manual items
+    (default kind filter = drama_cd only), making their extractions look
+    orphaned and purgeable."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT extract_root, track_path FROM pipeline_tracks"
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
 
 
 async def get_pipeline_tracks(item_id: int) -> list[dict]:
@@ -4938,6 +5281,10 @@ GAMES_SORTABLE_COLUMNS = {
 }
 
 _GAMES_PLAY_STATUSES = {"backlog", "playing", "completed", "dropped", "on_hold", "wishlist", "want_to_play"}
+
+# Drama-CD personal listen-progress tracker — items.listen_status. Mirrors
+# games.play_status; the UI labels 'completed' as "Finished" for audio context.
+_DRAMA_CD_LISTEN_STATUSES = {"backlog", "want_to_listen", "listening", "completed", "on_hold", "dropped", "wishlist"}
 
 
 async def get_tokuten_scan_paths() -> list[str]:

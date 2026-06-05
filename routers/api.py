@@ -34,7 +34,7 @@ EN_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 @router.get("/items")
 async def list_items(
-    sort: str = Query("scan_date", pattern="^(release_date|title|rating|scan_date|created_at|updated_at|product_code|confidence|translation_status)$"),
+    sort: str = Query("scan_date", pattern="^(release_date|title|rating|scan_date|created_at|updated_at|product_code|confidence|translation_status|listen_status)$"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
     search: Optional[str] = None,
     seiyuu: Optional[List[str]] = Query(None),
@@ -48,6 +48,8 @@ async def list_items(
     include_tokutens: bool = Query(False),
     only_tokutens: bool = Query(False),
     is_manual: Optional[bool] = Query(None),
+    listen_status: Optional[str] = Query(None, pattern="^(backlog|want_to_listen|listening|completed|on_hold|dropped|wishlist)$"),
+    listen_statuses: Optional[List[str]] = Query(None),
     tokuten_kind: Optional[str] = Query(None, pattern="^(audio|book|image|misc)$"),
     tokuten_source: Optional[str] = Query(None, pattern="^(dlsite|booth|melon|animate|stellaworth|physical|other)$"),
     limit: int = Query(500, ge=1, le=2000),
@@ -62,6 +64,8 @@ async def list_items(
         include_tokutens=include_tokutens,
         only_tokutens=only_tokutens,
         is_manual=is_manual,
+        listen_status=listen_status,
+        listen_statuses=listen_statuses,
         tokuten_kind=tokuten_kind,
         tokuten_source=tokuten_source,
         limit=limit, offset=offset,
@@ -129,7 +133,7 @@ async def system_pick_file(
         filetypes = [tuple(item) for item in raw_filetypes if isinstance(item, (list, tuple)) and len(item) == 2]
     else:
         filetypes = [
-            ("Archives", "*.7z *.zip *.rar *.001"),
+            ("Archives", "*.7z *.zip *.rar *.tar *.001"),
             ("All files", "*.*"),
         ]
 
@@ -168,7 +172,7 @@ async def system_pick_files(
         filetypes = [tuple(item) for item in raw_filetypes if isinstance(item, (list, tuple)) and len(item) == 2]
     else:
         filetypes = [
-            ("Archives", "*.7z *.zip *.rar *.001"),
+            ("Archives", "*.7z *.zip *.rar *.tar *.001"),
             ("All files", "*.*"),
         ]
 
@@ -1367,6 +1371,7 @@ async def refresh_metadata(item_id: int, _auth=Depends(require_api_key)):
         pretending to scrape DLsite for a synthetic code.
     Cover download happens inline so the user doesn't need a separate
     "fetch cover" step."""
+    import asyncio
     import logging
     from config import DLSITE_PROXY_URL
     import vndb_client
@@ -1376,23 +1381,57 @@ async def refresh_metadata(item_id: int, _auth=Depends(require_api_key)):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    # --- VNDB path (tokutens linked to a game) ---
+    # --- Tokuten path (linked bonus-CD entries) ---
     if item.get("kind") == "tokuten_audio" and item.get("tokuten_id"):
-        # Look up the tokuten row directly so we can read its vndb_id.
+        # Look up the tokuten row directly so we can read its vndb_id + source path.
         conn = await db.get_db()
         try:
             cur = await conn.execute(
-                "SELECT vndb_id, title FROM tokutens WHERE id = ?",
+                "SELECT vndb_id, title, local_path FROM tokutens WHERE id = ?",
                 (item["tokuten_id"],),
             )
             tk_row = await cur.fetchone()
         finally:
             await conn.close()
+
+        # 1) Prefer a bundled *.package.json in the tokuten's archive/folder (same treatment
+        #    as custom drama CDs). The rich metadata lands on the paired item; the fields the
+        #    tokuten record itself carries are mirrored so the Tokutens tab reflects it.
+        tk_local = (tk_row["local_path"] if tk_row else None) or ""
+        if tk_local:
+            from pipeline.package_import import find_package_at_path
+            payload = await asyncio.to_thread(find_package_at_path, tk_local)
+            if payload and item.get("product_code"):
+                meta = payload["items"][0]["metadata"]
+                await db.update_item_metadata(item["product_code"], meta)
+                tk_patch = {k: meta[k] for k in ("title", "title_en", "release_date") if meta.get(k)}
+                if tk_patch:
+                    import datetime as _dt
+                    tk_patch["updated_at"] = _dt.datetime.now().isoformat()
+                    conn = await db.get_db()
+                    try:
+                        sets = ", ".join(f"{k} = ?" for k in tk_patch)
+                        await conn.execute(
+                            f"UPDATE tokutens SET {sets} WHERE id = ?",
+                            list(tk_patch.values()) + [item["tokuten_id"]],
+                        )
+                        await conn.commit()
+                    finally:
+                        await conn.close()
+                logger.info(f"Refreshed tokuten {item['tokuten_id']} (item {item_id}) from bundled package")
+                return {
+                    "success": True,
+                    "product_code": item.get("product_code"),
+                    "title": meta.get("title"),
+                    "message": "Metadata refreshed from bundled package",
+                }
+
+        # 2) else fall back to VNDB (a linked game).
         tk_vndb = (tk_row["vndb_id"] if tk_row else None) or ""
         if not tk_vndb:
             raise HTTPException(
                 status_code=400,
-                detail="This tokuten has no linked VNDB id. Edit the tokuten and pick a VNDB game first.",
+                detail="This tokuten has no linked VNDB id and no bundled .package.json. Edit the tokuten and pick a VNDB game, or bundle a metadata JSON in its archive/folder.",
             )
         try:
             vn = await vndb_client.get_vn(tk_vndb)
@@ -1429,13 +1468,41 @@ async def refresh_metadata(item_id: int, _auth=Depends(require_api_key)):
             "message": "Tokuten metadata refreshed from VNDB",
         }
 
-    # --- DLsite path (real product codes only) ---
     product_code = item.get("product_code") or item.get("original_code")
+
+    # --- Bundled-package path (custom / non-DLsite items) ---
+    # A custom item (is_manual / synthetic code) has no DLsite page. If its archive ships a
+    # *.package.json, refresh re-reads it and re-applies that metadata - this is what the
+    # button should do for non-DLsite entries instead of pretending to scrape DLsite for a
+    # synthetic code. Only error if there's genuinely no bundled metadata to defer to.
     if not product_code or not _DLSITE_CODE_RE.match(product_code):
+        from pipeline.package_import import find_package_in_archive
+        from pipeline.extractor import _resolve_archives_for_item
+        scan_paths = await db.get_scan_paths()
+        archives = await asyncio.to_thread(_resolve_archives_for_item, item, scan_paths)
+        payload = None
+        for arc in archives:
+            payload = await asyncio.to_thread(find_package_in_archive, arc)
+            if payload:
+                break
+        if payload and item.get("product_code"):
+            ip = next((it for it in (payload.get("items") or []) if it.get("metadata")), None)
+            meta = ip.get("metadata") if ip else None
+            if meta:
+                await db.update_item_metadata(item["product_code"], meta)
+                logger.info(f"Refreshed metadata for {item['product_code']} (item {item_id}) from bundled package")
+                return {
+                    "success": True,
+                    "product_code": item["product_code"],
+                    "title": meta.get("title"),
+                    "message": "Metadata refreshed from bundled package",
+                }
         raise HTTPException(
             status_code=400,
-            detail="No metadata source for this item. Tokutens need a linked VNDB id; drama CDs need a real DLsite product code (RJ/BJ/VJ).",
+            detail="No metadata source for this item. Tokutens need a linked VNDB id; drama CDs need a real DLsite code (RJ/BJ/VJ); custom items need a bundled .package.json inside their archive.",
         )
+
+    # --- DLsite path (real product codes only) ---
     try:
         client_kwargs = {"timeout": 30.0}
         if DLSITE_PROXY_URL:
@@ -1895,6 +1962,17 @@ async def merge_seiyuu(request: SeiyuuMergeRequest, _auth=Depends(require_api_ke
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/seiyuu/backfill-romanizations")
+async def backfill_seiyuu_romanizations(
+    dry_run: bool = Query(True),
+    _auth=Depends(require_api_key),
+):
+    """Fill seiyuu_en slots that are missing or are JP-name copies using
+    romanizations already known elsewhere in the library (exact JP match).
+    ``dry_run=true`` (default) previews the changes without writing."""
+    return await db.backfill_seiyuu_romanizations(dry_run=dry_run)
 
 
 @router.delete("/seiyuu/aliases/{alias}")

@@ -8,6 +8,7 @@ class ItemUpdate(BaseModel):
     favorite: Optional[bool] = None
     notes: Optional[str] = None
     translation_status: Optional[str] = None
+    listen_status: Optional[str] = None
     custom_tags: Optional[list[str]] = None
     # Metadata fields (editable on manually-created cards, also usable for
     # hand-correcting scraped entries)

@@ -326,8 +326,13 @@ async def build_package_zip(
     include_txt: bool = True,
     include_tracklist: bool = True,
     include_all_archive_files: bool = False,
-) -> tuple[bytes, str]:
-    """Build a single-item package as an in-memory ZIP. Returns (bytes, suggested_filename)."""
+) -> tuple[bytes, str, list[dict]]:
+    """Build a single-item package as an in-memory ZIP.
+
+    Returns (bytes, suggested_filename, skipped_audio) where skipped_audio
+    lists tracks whose audio was requested but missing/unreadable on disk —
+    callers surface it so a subtitles-only ZIP never masquerades as a full
+    export."""
     item = await db.get_item(item_id)
     if not item:
         raise ValueError(f"Item {item_id} not found")
@@ -374,6 +379,7 @@ async def build_package_zip(
 
     buf = io.BytesIO()
     used_zip_names: set[str] = set()
+    skipped_audio: list[dict] = []
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         zf.writestr(
             f"{safe_code}/dramacd-transcripts.json",
@@ -517,8 +523,20 @@ async def build_package_zip(
                         track_entry["files"].append(audio_name)
                     except OSError as exc:
                         logger.warning("Failed to add audio %s to package: %s", src, exc)
+                        skipped_audio.append({
+                            "track_id": track_id,
+                            "title": track.get("title"),
+                            "path": str(src),
+                            "reason": "unreadable",
+                        })
                 else:
                     logger.info("Audio missing for track %s (%s); skipping in package", track_id, src)
+                    skipped_audio.append({
+                        "track_id": track_id,
+                        "title": track.get("title"),
+                        "path": str(src),
+                        "reason": "missing",
+                    })
 
             manifest_tracks.append(track_entry)
 
@@ -587,6 +605,7 @@ async def build_package_zip(
             "include_tracklist": bool(include_tracklist),
             "include_all_archive_files": bool(include_all_archive_files),
             "archive_extras_added": archive_extras_added,
+            "skipped_audio": skipped_audio,
             "tracks": manifest_tracks,
         }
         zf.writestr(
@@ -596,7 +615,7 @@ async def build_package_zip(
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = f"dramacd-package-{safe_code}-{stamp}.zip"
-    return buf.getvalue(), filename
+    return buf.getvalue(), filename, skipped_audio
 
 
 def extract_transcripts_json_from_zip(raw: bytes) -> dict:

@@ -204,6 +204,7 @@ const app = createApp({
             seiyuu: [],
             tag: [],
             translation_status: '',
+            listen_status: '',   // '' = all, or one of backlog/want_to_listen/listening/completed/on_hold/dropped/wishlist
             // Content type discriminator. Defaults to drama_cd so the library
             // opens on the normal 700+ drama-CD list; tokuten/all/game are
             // explicit opt-ins. 'game' shows nothing yet — placeholder for the
@@ -329,6 +330,7 @@ const app = createApp({
                     if (Array.isArray(data.seiyuu)) filters.seiyuu = [...data.seiyuu];
                     if (Array.isArray(data.tag)) filters.tag = [...data.tag];
                     if (typeof data.translation_status === 'string') filters.translation_status = data.translation_status;
+                    if (typeof data.listen_status === 'string') filters.listen_status = data.listen_status;
                     if (typeof data.favorite === 'boolean') filters.favorite = data.favorite;
                     if (data.has_metadata === true || data.has_metadata === false || data.has_metadata === null) filters.has_metadata = data.has_metadata;
                     if (data.is_manual === true || data.is_manual === false || data.is_manual === null) filters.is_manual = data.is_manual;
@@ -372,6 +374,7 @@ const app = createApp({
                 seiyuu: filters.seiyuu,
                 tag: filters.tag,
                 translation_status: filters.translation_status,
+                listen_status: filters.listen_status,
                 favorite: filters.favorite,
                 has_metadata: filters.has_metadata,
                 is_manual: filters.is_manual,
@@ -912,6 +915,54 @@ const app = createApp({
 
         function previewSeiyuuMerge() { return _runSeiyuuMerge(true); }
         function applySeiyuuMerge() { return _runSeiyuuMerge(false); }
+
+        // Backfill romanizations: fill seiyuu_en slots that are still JP copies
+        // using names already romanized elsewhere in the library (exact match).
+        const seiyuuBackfillBusy = ref('');
+        const seiyuuBackfillPreview = ref(null);
+        const seiyuuBackfillMessage = ref('');
+        const seiyuuBackfillError = ref('');
+
+        async function _runSeiyuuBackfill(dryRun) {
+            seiyuuBackfillBusy.value = dryRun ? 'preview' : 'apply';
+            seiyuuBackfillMessage.value = '';
+            seiyuuBackfillError.value = '';
+            try {
+                const resp = await fetch('/api/seiyuu/backfill-romanizations?dry_run=' + (dryRun ? 'true' : 'false'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    seiyuuBackfillError.value = data.detail || 'Backfill failed';
+                    return;
+                }
+                seiyuuBackfillPreview.value = data;
+                if (dryRun) {
+                    seiyuuBackfillMessage.value = data.items_changed
+                        ? `Preview: ${data.names_filled} name(s) across ${data.items_changed} item(s) would be filled (from ${data.known_names} known).`
+                        : `Nothing to fill — no JP-only names match the ${data.known_names} known romanization(s).`;
+                } else {
+                    seiyuuBackfillMessage.value = `Filled ${data.names_filled} name(s) across ${data.items_changed} item(s).`;
+                    // Inventory + filter dropdown are stale after writing.
+                    await loadSeiyuuInventory();
+                    if (typeof loadSeiyuuList === 'function') {
+                        try { await loadSeiyuuList(); } catch (_) {}
+                    }
+                    if (typeof loadItems === 'function') {
+                        try { await loadItems(); } catch (_) {}
+                    }
+                }
+            } catch (err) {
+                seiyuuBackfillError.value = `Backfill request failed: ${err.message || err}`;
+                console.warn('seiyuu backfill failed:', err);
+            } finally {
+                seiyuuBackfillBusy.value = '';
+            }
+        }
+
+        function previewSeiyuuBackfill() { return _runSeiyuuBackfill(true); }
+        function applySeiyuuBackfill() { return _runSeiyuuBackfill(false); }
         const apiGeminiModel = ref('gemini-2.0-flash');
         const apiGeminiKeyInput = ref('');
         const apiGeminiHasKey = ref(false);
@@ -968,6 +1019,7 @@ const app = createApp({
         const playerTranslationSegments = ref([]);
         const playerTranscriptRunId = ref(null);
         const playerTranslationRunId = ref(null);
+        const playerTranscriptRuns = ref([]);   // all transcript runs for the current player track (for the switcher)
         const playerActiveSegmentIndex = ref(-1);
         // Player-only safety: pencil icons stay hidden until the user opts in.
         // Prevents fat-fingering an edit while watching. Persists across reloads.
@@ -1119,7 +1171,7 @@ const app = createApp({
         // Computed
         const hasActiveFilters = computed(() =>
             searchQuery.value || filters.seiyuu.length > 0 || filters.tag.length > 0 ||
-            filters.translation_status || filters.favorite
+            filters.translation_status || filters.listen_status || filters.favorite
         );
         // Selection helpers — subtab-aware. The bulk-actions bar reads
         // these via the same name across all three subtabs, so a count
@@ -1272,7 +1324,33 @@ const app = createApp({
                 if (!byRoot.has(r)) byRoot.set(r, []);
                 byRoot.get(r).push(tracks[i]);
             }
-            const subClusters = Array.from(byRoot.values());
+            let subClusters = Array.from(byRoot.values());
+
+            // Step 2b: split each stem-cluster into duration buckets (mirrors
+            // backend). Without this, tracks that share a stem prefix but are
+            // wildly different recordings (e.g. main track + freetalk + bonus
+            // all named "RJ12345*") collapse into a single group and only the
+            // preferred one ever appears in the transcription list.
+            const bucketed = [];
+            for (const sub of subClusters) {
+                const buckets = []; // [{ d: number|null, items: track[] }]
+                for (const t of sub) {
+                    const d = t.duration_seconds;
+                    let placed = false;
+                    if (typeof d === 'number') {
+                        for (const b of buckets) {
+                            if (typeof b.d === 'number' && Math.abs(b.d - d) <= DURATION_TOL) {
+                                b.items.push(t);
+                                placed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!placed) buckets.push({ d, items: [t] });
+                }
+                for (const b of buckets) bucketed.push(b.items);
+            }
+            subClusters = bucketed;
 
             // Step 3: label variants per sub-cluster (regex is now COSMETIC —
             // it decides pill text, not grouping).
@@ -1314,6 +1392,10 @@ const app = createApp({
                     variants,
                     duration_seconds: preferred.duration_seconds,
                     track_path: preferred.track_path,
+                    // On-disk presence of the playable (preferred) file.
+                    // `!== false` so older responses without the field
+                    // default to "present" instead of flagging everything.
+                    file_exists: preferred.file_exists !== false,
                     transcript_run_count: sub.reduce((s, t) => s + Number(t.transcript_run_count || 0), 0),
                     translation_run_count: sub.reduce((s, t) => s + Number(t.translation_run_count || 0), 0),
                     min_track_index: Math.min(...sub.map(t => Number(t.track_index || 0))),
@@ -1329,6 +1411,24 @@ const app = createApp({
         // CD track shows once with codec + variant pickers instead of an entry
         // per file.
         const playerAvailableGroups = computed(() => _groupTracks(playerAvailableTracks.value || [], whisperSettings.value.preferred_variant));
+        // Groups whose audio file is gone from disk (DB row survived a
+        // workspace cleanup). Drives the "re-extract" banner + row badges.
+        const playerMissingAudioCount = computed(() =>
+            (playerAvailableGroups.value || []).filter(g => g.file_exists === false).length
+        );
+        // Atelier CD-card dot: 'present' = all extracted audio on disk,
+        // 'missing' = tracks indexed but files gone, 'none' = never extracted.
+        const workshopAudioState = computed(() => {
+            const tracks = pipelineTracks.value || [];
+            if (!tracks.length) return 'none';
+            return tracks.every(t => t.file_exists !== false) ? 'present' : 'missing';
+        });
+        const workshopAudioDotTitle = computed(() => {
+            const state = workshopAudioState.value;
+            if (state === 'present') return 'Audio extracted';
+            if (state === 'missing') return 'Audio files missing on disk — re-extract from Archive';
+            return 'Audio not extracted';
+        });
         // The group currently loaded in the player (or null) — drives the
         // codec/variant pickers in the header bar above the lyrics.
         const playerActiveGroup = computed(() => {
@@ -1731,6 +1831,7 @@ const app = createApp({
                     params.append('tag', t);
                 }
                 if (filters.translation_status) params.set('translation_status', filters.translation_status);
+                if (filters.listen_status) params.set('listen_status', filters.listen_status);
                 if (filters.favorite) params.set('favorite', 'true');
                 if (filters.has_metadata === true) params.set('has_metadata', 'true');
                 else if (filters.has_metadata === false) params.set('has_metadata', 'false');
@@ -1874,7 +1975,7 @@ const app = createApp({
                     body: JSON.stringify({
                         title,
                         filetypes: [
-                            ['Archives', '*.7z *.zip *.rar *.001'],
+                            ['Archives', '*.7z *.zip *.rar *.tar *.001'],
                             ['All files', '*.*'],
                         ],
                     }),
@@ -2086,7 +2187,7 @@ const app = createApp({
                     body: JSON.stringify({
                         title: 'Pick drama CD archive',
                         filetypes: [
-                            ['Archives', '*.7z *.zip *.rar *.001'],
+                            ['Archives', '*.7z *.zip *.rar *.tar *.001'],
                             ['All files', '*.*'],
                         ],
                     }),
@@ -3950,6 +4051,81 @@ const app = createApp({
             _playStatusDropdownGame = null;
         }
 
+        // Listen-status quick-dropdown — drama-CD parallel to play-status.
+        // Same fixed-positioned popup, same click-outside dismissal.
+        const listenStatusDropdownFor = ref(null);
+        const listenStatusDropdownRect = ref(null);
+        const LISTEN_STATUS_OPTIONS = ['backlog', 'want_to_listen', 'listening', 'completed', 'on_hold', 'dropped', 'wishlist'];
+        const LISTEN_STATUS_LABELS = {
+            backlog: 'Backlog',
+            want_to_listen: 'Want to listen',
+            listening: 'Listening',
+            completed: 'Finished',
+            on_hold: 'On hold',
+            dropped: 'Dropped',
+            wishlist: 'Wishlist',
+        };
+        function formatListenStatus(s) {
+            if (!s) return formatListenStatus('backlog');
+            return LISTEN_STATUS_LABELS[s] || String(s).replace(/_/g, ' ');
+        }
+        let _listenStatusDropdownItem = null;
+        function openListenStatusDropdown(target, item, ev) {
+            listenStatusDropdownFor.value = target;
+            if (ev && ev.currentTarget) {
+                const r = ev.currentTarget.getBoundingClientRect();
+                listenStatusDropdownRect.value = {
+                    top: r.bottom + 4,
+                    left: r.left,
+                };
+            }
+            _listenStatusDropdownItem = item;
+        }
+        function selectListenStatusOption(status) {
+            const it = _listenStatusDropdownItem;
+            listenStatusDropdownFor.value = null;
+            _listenStatusDropdownItem = null;
+            if (!it) return;
+            setItemListenStatus(it, status);
+        }
+        function closeListenStatusDropdown() {
+            listenStatusDropdownFor.value = null;
+            _listenStatusDropdownItem = null;
+        }
+
+        // Patch listen_status on a drama-CD item. Optimistic update with
+        // rollback on HTTP failure; also mirrors onto selectedItem so the
+        // detail panel reflects the new value immediately.
+        async function setItemListenStatus(item, nextStatus) {
+            if (!item || !nextStatus) return;
+            const prev = item.listen_status || 'backlog';
+            if (prev === nextStatus) return;
+            item.listen_status = nextStatus;
+            try {
+                const resp = await fetch(`/api/items/${item.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ listen_status: nextStatus }),
+                });
+                if (!resp.ok) {
+                    item.listen_status = prev;
+                    return;
+                }
+                const updated = await resp.json();
+                Object.assign(item, updated);
+                if (selectedItem.value && selectedItem.value.id === item.id) {
+                    selectedItem.value = { ...selectedItem.value, ...updated };
+                }
+                // Refresh visible list so a filter-active grid drops/adds
+                // the row, and stats sub-pill counts stay accurate.
+                if (filters.listen_status) loadItems();
+                loadStats();
+            } catch (err) {
+                item.listen_status = prev;
+                console.error('Set listen_status failed:', err);
+            }
+        }
+
         // Direct play_status mutation (used by the read-mode dropdown on the
         // game card pill and the detail panel pill — see task #6). Patches
         // the row + refreshes the games-stats counts so the sub-pills stay
@@ -4601,6 +4777,12 @@ const app = createApp({
                 a.remove();
                 URL.revokeObjectURL(url);
                 packageMessage.value = `Downloaded ${filename} (${formatBytes(blob.size)})`;
+                // Backend flags audio that was requested but missing on disk —
+                // surface it loudly so a subtitles-only ZIP doesn't pass as full.
+                const skipped = parseInt(resp.headers.get('X-DramaCD-Audio-Skipped') || '0', 10);
+                if (skipped > 0) {
+                    packageError.value = `⚠ ${skipped} audio file${skipped !== 1 ? 's' : ''} missing on disk — skipped. Re-extract from Archive, then export again.`;
+                }
             } catch (err) {
                 packageError.value = `Download failed: ${err.message || err}`;
                 console.error('Package preset export failed:', err);
@@ -4647,6 +4829,10 @@ const app = createApp({
                 a.remove();
                 URL.revokeObjectURL(url);
                 packageMessage.value = `Downloaded ${filename} (${formatBytes(blob.size)})`;
+                const skipped = parseInt(resp.headers.get('X-DramaCD-Audio-Skipped') || '0', 10);
+                if (skipped > 0) {
+                    packageError.value = `⚠ ${skipped} audio file${skipped !== 1 ? 's' : ''} missing on disk — skipped. Re-extract from Archive, then export again.`;
+                }
             } catch (err) {
                 packageError.value = `Download failed: ${err.message || err}`;
                 console.error('Package download failed:', err);
@@ -5861,6 +6047,61 @@ const app = createApp({
             } finally {
                 pipelineBusy.value = false;
             }
+        }
+
+        async function importSubtitlesForCurrentItem() {
+            if (!pipelineSelectedItemId.value) {
+                pipelineLoadError.value = 'Enter a valid item id';
+                return;
+            }
+            pipelineBusy.value = true;
+            pipelineLoadError.value = '';
+            try {
+                const resp = await fetch(`/api/pipeline/items/${pipelineSelectedItemId.value}/import-subtitles`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    pipelineLoadError.value = data.detail || 'Failed to import subtitles';
+                    return;
+                }
+                const n = data.imported || 0;
+                const skipped = data.skipped_existing || 0;
+                const subs = data.tracks_with_subs || 0;
+                pipelineActiveSummary.value = n
+                    ? `Imported ${n} subtitle transcript(s)` + (skipped ? `, ${skipped} already had one` : '')
+                    : (subs ? `No new imports (${skipped} track(s) already transcribed)` : 'No bundled .vtt/.srt found next to the audio');
+                if (n) {
+                    pushToast({ kind: 'success', title: `Imported ${n} subtitle transcript(s)`, ttl: 4000 });
+                }
+                if (pipelineTrackId.value) await loadPipelineRuns();
+            } catch (err) {
+                pipelineLoadError.value = 'Failed to import subtitles';
+                console.error('Failed to import subtitles:', err);
+            } finally {
+                pipelineBusy.value = false;
+            }
+        }
+
+        async function selectPlayerTranscriptRun(runId) {
+            // Switch the active transcript for the track currently open in the Player.
+            if (!playerTrackId.value || runId === playerTranscriptRunId.value) return;
+            try {
+                await fetch(`/api/pipeline/tracks/${playerTrackId.value}/active-transcript/${runId}`, { method: 'PUT' });
+            } catch (err) {
+                console.error('Failed to set active transcript:', err);
+            }
+            await loadPlayerTrack(playerTrackId.value, runId, playerTranslationRunId.value);
+        }
+
+        function describeTranscriptRun(run) {
+            // Short label for the switcher: language + where it came from.
+            const lang = (run.language || '?').toUpperCase();
+            const src = run.source === 'bundled_subtitle' ? 'subtitle'
+                : run.source === 'whisper' ? 'whisper'
+                : (run.source || 'manual');
+            return `${lang} · ${src}` + (run.segment_count ? ` · ${run.segment_count}` : '');
         }
 
 
@@ -7734,10 +7975,27 @@ const app = createApp({
             selectedSeiyuuOption.value = '';
             selectedTagOption.value = '';
             filters.translation_status = '';
+            filters.listen_status = '';
             filters.favorite = false;
             filters.has_metadata = null;
             filters.is_manual = null;
             loadItems();
+        }
+
+        // Silent reset — same as clearFilters but skips the loadItems()
+        // call, so callers that immediately set a fresh filter can avoid
+        // racing two HTTP requests (the cleared one + the filtered one).
+        function _resetDramaFiltersSilent() {
+            searchQuery.value = '';
+            filters.seiyuu = [];
+            filters.tag = [];
+            selectedSeiyuuOption.value = '';
+            selectedTagOption.value = '';
+            filters.translation_status = '';
+            filters.listen_status = '';
+            filters.favorite = false;
+            filters.has_metadata = null;
+            filters.is_manual = null;
         }
 
         // Stat-pill click handlers — clicking a stat pill in the sidebar
@@ -7746,27 +8004,36 @@ const app = createApp({
         // version keeps the original semantics; games + tokutens have
         // their own dispatcher below.
         function applyStatFilter(kind) {
-            // Always start fresh: don't combine the click with leftover
-            // filters or the result is confusing.
-            clearFilters();
+            // Reset silently first so the new filter doesn't combine with
+            // leftover state, but DON'T fire loadItems yet — we'll fire it
+            // exactly once after the new filter is in place to avoid a
+            // race where the cleared response overwrites the filtered one.
+            _resetDramaFiltersSilent();
             activeTab.value = 'library';
             switch (kind) {
                 case 'total':
-                    // No-op — clearFilters already showed all.
+                    // Nothing else to set — just show all.
                     break;
                 case 'favorites':
                     filters.favorite = true;
-                    loadItems();
                     break;
                 case 'with_metadata':
                     filters.has_metadata = true;
-                    loadItems();
                     break;
                 case 'pending':
                     filters.has_metadata = false;
-                    loadItems();
+                    break;
+                default:
+                    // listen_<status> pills — drill into a single listen_status.
+                    if (typeof kind === 'string' && kind.startsWith('listen_')) {
+                        const status = kind.slice('listen_'.length);
+                        if (LISTEN_STATUS_OPTIONS.includes(status)) {
+                            filters.listen_status = status;
+                        }
+                    }
                     break;
             }
+            loadItems();
         }
 
         function applyGameStatFilter(kind) {
@@ -7933,7 +8200,7 @@ const app = createApp({
             unmatchedFilesPanelOpen.value = true;
             unmatchedFilesLoading.value = true;
             try {
-                const resp = await fetch('/api/unmatched-files');
+                const resp = await fetch('/api/unmatched');
                 if (!resp.ok) throw new Error('failed');
                 const data = await resp.json();
                 unmatchedFilesList.value = Array.isArray(data) ? data : (data.files || []);
@@ -8288,6 +8555,23 @@ const app = createApp({
             }
         }
 
+        // Safety net for any audio load failure (404 from a deleted file,
+        // unsupported codec, transcode error). Without this the <audio>
+        // element swallows the error and play just silently does nothing.
+        function onPlayerAudioError() {
+            // closePlayer() nulls playerTrackId before clearing src — use it
+            // to ignore the spurious error fired by the src='' teardown.
+            if (!playerTrackId.value) return;
+            const el = playerAudioElement.value;
+            if (el && !el.currentSrc && !el.getAttribute('src')) return;
+            pushToast({
+                kind: 'failure',
+                title: 'Audio failed to load',
+                body: 'The file may be missing on disk — re-extract this CD from Atelier (Archive → Queue extraction).',
+                ttl: 7000,
+            });
+        }
+
         function closePlayer() {
             playerTrackId.value = null;
             playerTrackTitle.value = '';
@@ -8332,6 +8616,18 @@ const app = createApp({
                     return;
                 }
 
+                // DB row exists but the extracted file is gone — bail with a
+                // clear prompt instead of loading a player that can't play.
+                if (track.file_exists === false) {
+                    pushToast({
+                        kind: 'failure',
+                        title: 'Audio file not on disk',
+                        body: 'Re-extract this CD from Atelier (Archive → Queue extraction), then try again.',
+                        ttl: 7000,
+                    });
+                    return;
+                }
+
                 playerTrackId.value = trackId;
                 // Respect the user's metadata-language preference. On EN we prefer
                 // title_en and fall back to JP; on JP it's the reverse. Final
@@ -8344,27 +8640,19 @@ const app = createApp({
                     : (titleJp || titleEn || filenameFallback);
                 playerTrackDuration.value = track.duration_seconds ? `${(track.duration_seconds / 60).toFixed(1)}min` : 'Unknown';
 
-                // Load transcript segments
-                if (transcriptRunId) {
-                    const transcriptResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts/${transcriptRunId}`);
+                // Load the transcript run list (for the switcher) + the chosen/active run.
+                const trListResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts`);
+                const trListData = await trListResp.json();
+                playerTranscriptRuns.value = trListData.runs || [];
+                const chosenTranscriptRunId = transcriptRunId || trListData.active?.active_transcript_run_id || null;
+                if (chosenTranscriptRunId) {
+                    const transcriptResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts/${chosenTranscriptRunId}`);
                     const transcriptData = await transcriptResp.json();
                     playerTranscriptSegments.value = transcriptData.segments || [];
-                    playerTranscriptRunId.value = transcriptRunId;
+                    playerTranscriptRunId.value = chosenTranscriptRunId;
                 } else {
-                    // Try to load active transcript
-                    const activeResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts`);
-                    const activeData = await activeResp.json();
-                    const activeTranscriptRunId = activeData.active?.active_transcript_run_id;
-
-                    if (activeTranscriptRunId) {
-                        const transcriptResp = await fetch(`/api/pipeline/tracks/${trackId}/transcripts/${activeTranscriptRunId}`);
-                        const transcriptData = await transcriptResp.json();
-                        playerTranscriptSegments.value = transcriptData.segments || [];
-                        playerTranscriptRunId.value = activeTranscriptRunId;
-                    } else {
-                        playerTranscriptSegments.value = [];
-                        playerTranscriptRunId.value = null;
-                    }
+                    playerTranscriptSegments.value = [];
+                    playerTranscriptRunId.value = null;
                 }
 
                 // Load translation segments if available
@@ -8562,12 +8850,15 @@ const app = createApp({
             seiyuuMergeBusy, seiyuuMergeMessage, seiyuuMergeError, seiyuuMergePreview,
             filteredSeiyuuInventory, loadSeiyuuInventory, loadSeiyuuSuggestions, useSeiyuuSuggestion,
             previewSeiyuuMerge, applySeiyuuMerge,
+            seiyuuBackfillBusy, seiyuuBackfillPreview, seiyuuBackfillMessage, seiyuuBackfillError,
+            previewSeiyuuBackfill, applySeiyuuBackfill,
             seiyuuJpNamesFor, seiyuuSelectedJpConsistent,
             activeTab,
             tokutenCreateBusy, tokutenCreateError, createBlankTokuten,
             addMenuOpen,
             pipelineEnabled, pipelineStatus, pipelineLoadError, pipelineBusy,
             pipelineSelectedItemId, selectedWorkshopItem, pipelineTracks, pipelineTrackId, pipelineSectionsOpen, sidebarSectionsOpen,
+            workshopAudioState, workshopAudioDotTitle,
             workshopSearchQuery, workshopSearchResults, workshopSearchOpen, workshopSearchLoading,
             workshopSearchInput, selectWorkshopSearchResult, closeWorkshopSearch,
             effectiveTrackCount,
@@ -8684,6 +8975,7 @@ const app = createApp({
             copyCleanTranscriptSource,
             queueAutoTranslation, pollAutoTranslationProgress, controlAutoTranslation,
             queueExtractionForCurrentItem,
+            importSubtitlesForCurrentItem,
             loadTranscriptRunDetail, loadTranslationRunDetail, closeSegmentViewer,
             deleteTranscriptRun, deleteTranslationRun,
             toggleWorkshopEnabled, togglePipelineSection, toggleWorkshopSection, toggleApiSection, toggleSidebarSection,
@@ -8732,12 +9024,20 @@ const app = createApp({
             PLAY_STATUS_OPTIONS, PLAY_STATUS_LABELS, formatPlayStatus,
             openPlayStatusDropdown,
             selectPlayStatusOption, closePlayStatusDropdown,
+            // Drama-CD listen_status — same dropdown pattern, items-side.
+            setItemListenStatus,
+            listenStatusDropdownFor, listenStatusDropdownRect,
+            LISTEN_STATUS_OPTIONS, LISTEN_STATUS_LABELS, formatListenStatus,
+            openListenStatusDropdown,
+            selectListenStatusOption, closeListenStatusDropdown,
             // Player
             playerItemId, playerAvailableTracks, playerAvailableGroups, playerActiveGroup, switchPlayerVariant,
+            playerMissingAudioCount, onPlayerAudioError,
             playerTrackId, playerTrackTitle, playerTrackDuration, playerIsPlaying,
             playerCurrentTime, playerDuration, playerProgressPercent,
             playerTranscriptSegments, playerTranslationSegments, playerActiveSegmentIndex,
             playerTranscriptRunId, playerTranslationRunId,
+            playerTranscriptRuns, selectPlayerTranscriptRun, describeTranscriptRun,
             playerEditMode, togglePlayerEditMode,
             glossaryExpanded, toggleGlossaryExpanded,
             playerAudioElement,

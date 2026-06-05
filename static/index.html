@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DramaCD Library</title>
     <link rel="icon" href="/favicon.ico" sizes="any">
-    <link rel="stylesheet" href="/static/css/style.css?v=119">
+    <link rel="stylesheet" href="/static/css/style.css?v=120">
     <link rel="stylesheet" href="/static/css/player-themes.css?v=2">
     <link rel="stylesheet" href="/static/css/app-themes.css?v=4">
 </head>
@@ -85,6 +85,17 @@
                                 <option value="extracted">Extracted</option>
                                 <option value="transcribed">Transcribed</option>
                                 <option value="translated">Translated</option>
+                            </select>
+
+                            <select v-model="filters.listen_status" @change="loadItems()">
+                                <option value="">All Listen Status</option>
+                                <option value="backlog">Backlog</option>
+                                <option value="want_to_listen">Want to listen</option>
+                                <option value="listening">Listening</option>
+                                <option value="completed">Finished</option>
+                                <option value="on_hold">On hold</option>
+                                <option value="dropped">Dropped</option>
+                                <option value="wishlist">Wishlist</option>
                             </select>
 
                             <select v-model="sortBy" @change="loadItems()">
@@ -210,6 +221,35 @@
                         </div>
                         <div class="stat clickable" @click="showUnmatchedFiles" title="Files the scanner couldn't extract a product code from">
                             Unmatched: <span class="stat-value">{{ stats.unmatched_files }}</span>
+                        </div>
+                    </div>
+                    <!-- Listen-status sub-pills — mirror the games surface so the
+                         user can drill into per-status counts. Pills only render
+                         when the count is non-zero to keep the sidebar quiet. -->
+                    <div class="stats-substack" v-if="stats.listen_statuses">
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.want_to_listen || 0) > 0"
+                             @click="applyStatFilter('listen_want_to_listen')">
+                            Want to listen: <span class="stat-value">{{ stats.listen_statuses.want_to_listen }}</span>
+                        </div>
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.listening || 0) > 0"
+                             @click="applyStatFilter('listen_listening')">
+                            Listening: <span class="stat-value">{{ stats.listen_statuses.listening }}</span>
+                        </div>
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.completed || 0) > 0"
+                             @click="applyStatFilter('listen_completed')">
+                            Finished: <span class="stat-value">{{ stats.listen_statuses.completed }}</span>
+                        </div>
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.on_hold || 0) > 0"
+                             @click="applyStatFilter('listen_on_hold')">
+                            On hold: <span class="stat-value">{{ stats.listen_statuses.on_hold }}</span>
+                        </div>
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.dropped || 0) > 0"
+                             @click="applyStatFilter('listen_dropped')">
+                            Dropped: <span class="stat-value">{{ stats.listen_statuses.dropped }}</span>
+                        </div>
+                        <div class="stat-sub clickable" v-if="(stats.listen_statuses?.wishlist || 0) > 0"
+                             @click="applyStatFilter('listen_wishlist')">
+                            Wishlist: <span class="stat-value">{{ stats.listen_statuses.wishlist }}</span>
                         </div>
                     </div>
                 </section>
@@ -754,6 +794,7 @@
                     <filter-chip v-for="s in filters.seiyuu" :key="'seiyuu-' + s" :label="'Seiyuu: ' + s" @remove="removeSeiyuuFilter(s)"></filter-chip>
                     <filter-chip v-for="t in filters.tag" :key="'tag-' + t" :label="'Tag: ' + t" @remove="removeTagFilter(t)"></filter-chip>
                     <filter-chip v-if="filters.translation_status" :label="'Status: ' + filters.translation_status" @remove="filters.translation_status = ''; loadItems()"></filter-chip>
+                    <filter-chip v-if="filters.listen_status" :label="'Listen: ' + formatListenStatus(filters.listen_status)" @remove="filters.listen_status = ''; loadItems()"></filter-chip>
                     <filter-chip v-if="filters.favorite" label="Favorites only" @remove="filters.favorite = false; loadItems()"></filter-chip>
                     <button class="btn btn-secondary" style="font-size:11px; padding:4px 10px" @click="clearFilters">Clear All</button>
                 </div>
@@ -892,6 +933,11 @@
                                 </div>
                                 <div class="card-circle" v-if="item.circle">{{ item.circle }}</div>
                                 <div class="card-code">{{ item.product_code }}</div>
+                                <div class="card-meta-row">
+                                    <span class="listen-status-pill clickable" :class="'listen-' + (item.listen_status || 'backlog')"
+                                          @click.stop="openListenStatusDropdown(item.id, item, $event)"
+                                          title="Click to change">{{ formatListenStatus(item.listen_status || 'backlog') }}</span>
+                                </div>
                             </div>
 
                             <!-- Hover-revealed quick actions: Play (no transcript needed) + Send to Workshop. -->
@@ -978,7 +1024,14 @@
                                 <img v-if="selectedWorkshopItem.cover_local" :src="coverUrl(selectedWorkshopItem)" class="workshop-cd-cover">
                                 <div v-else class="workshop-cd-cover workshop-cd-cover-blank"></div>
                                 <div class="workshop-cd-body">
-                                    <div class="workshop-cd-title">{{ displayTitle(selectedWorkshopItem) }}</div>
+                                    <div class="workshop-cd-title">
+                                        <!-- Audio-on-disk dot: filled (library-card pink) when the
+                                             extracted files are present, hollow when not extracted
+                                             or the files have been cleaned off disk. -->
+                                        <span class="workshop-audio-dot"
+                                              :class="workshopAudioState === 'present' ? 'on' : 'off'"
+                                              :title="workshopAudioDotTitle"></span>{{ displayTitle(selectedWorkshopItem) }}
+                                    </div>
                                     <div class="workshop-meta-row" v-if="selectedWorkshopItem.circle">
                                         <span class="workshop-meta-label">Circle:</span> {{ selectedWorkshopItem.circle }}
                                     </div>
@@ -1047,6 +1100,12 @@
                                                 @click.stop="queueExtractionForCurrentItem"
                                                 :disabled="pipelineBusy || !pipelineSelectedItemId">
                                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                                        </button>
+                                        <button class="icon-btn"
+                                                title="Import bundled subtitles (.vtt/.srt) as transcripts"
+                                                @click.stop="importSubtitlesForCurrentItem"
+                                                :disabled="pipelineBusy || !pipelineSelectedItemId">
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15h4M7 11h2M13 11h4M15 15h2"/></svg>
                                         </button>
                                         <button class="icon-btn"
                                                 :class="{ 'icon-btn-toggle-on': pipelineForceExtract }"
@@ -1686,10 +1745,18 @@
                                 </div>
 
                                 <div v-if="playerAvailableGroups.length > 0" style="margin-top: 16px;">
+                                    <!-- Tracks are DB rows; the extracted files can be gone
+                                         (workspace cleanup). Say so up front instead of letting
+                                         play buttons silently fail. -->
+                                    <div v-if="playerMissingAudioCount > 0" class="player-missing-audio-banner">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                                        <span v-if="playerMissingAudioCount === playerAvailableGroups.length">Audio files are not on disk — re-extract this CD from Atelier (Archive → Queue extraction).</span>
+                                        <span v-else>{{ playerMissingAudioCount }} of {{ playerAvailableGroups.length }} tracks are missing their audio on disk — re-extract from Atelier to restore them.</span>
+                                    </div>
                                     <div class="window-label">Available Tracks ({{ playerAvailableGroups.length }})</div>
                                     <div class="player-track-list">
                                         <div v-for="group in playerAvailableGroups" :key="group.preferred_track_id"
-                                             class="player-track-item" @click="loadPlayerTrack(group.preferred_track_id)">
+                                             class="player-track-item" :class="{ 'track-missing': group.file_exists === false }" @click="loadPlayerTrack(group.preferred_track_id)">
                                             <div class="player-track-main">
                                                 <div class="player-track-info">
                                                     <div class="player-track-name">{{ currentLang === 'en' ? (group.title_en || group.title) : (group.title || group.title_en) }}</div>
@@ -1697,6 +1764,11 @@
                                                         {{ currentLang === 'en' ? group.title : group.title_en }}
                                                     </div>
                                                     <div class="player-track-stats track-row-meta">
+                                                        <span v-if="group.file_exists === false"
+                                                              class="track-meta-pill track-missing-pill"
+                                                              title="Audio file not on disk — re-extract from Atelier">
+                                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>not on disk
+                                                        </span>
                                                         <span class="track-meta-pill"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>{{ group.duration_seconds ? (group.duration_seconds / 60).toFixed(1) + 'm' : '?' }}</span>
                                                         <span class="codec-pill-cluster">
                                                             <span v-for="(c, i) in group.codecs" :key="'c-' + i"
@@ -1780,6 +1852,14 @@
                                     </span>
                                 </div>
                                 <div v-else-if="playerTrackDuration" class="player-stage-meta">{{ playerTrackDuration }}</div>
+                                <!-- Transcript switcher: only when a track has more than one transcript run -->
+                                <div v-if="playerTranscriptRuns.length > 1" class="player-stage-picker-row" title="Switch transcript">
+                                    <button v-for="run in playerTranscriptRuns"
+                                            :key="'ptr-' + run.id"
+                                            class="codec-pill picker-pill"
+                                            :class="{ preferred: run.id === playerTranscriptRunId }"
+                                            @click="selectPlayerTranscriptRun(run.id)">{{ describeTranscriptRun(run) }}</button>
+                                </div>
                             </div>
                             <button class="player-stage-edit-toggle"
                                     :class="{ active: playerEditMode }"
@@ -1952,6 +2032,7 @@
                         @play="playerIsPlaying = true"
                         @pause="playerIsPlaying = false"
                         @ended="onPlayerEnded"
+                        @error="onPlayerAudioError"
                         preload="metadata">
                     </audio>
                 </template>
@@ -2427,6 +2508,43 @@
                                     Same person, different romanizations. Use the auto-suggested groups
                                     below, or hand-pick the duplicates manually, then Preview → Apply.
                                 </p>
+
+                                <!-- Backfill romanizations from names already known in the library -->
+                                <div class="seiyuu-backfill-block" style="margin: 4px 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2, rgba(127,127,127,0.06));">
+                                    <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                                        <strong style="font-size:12px;">Fill missing romanizations</strong>
+                                        <span style="color: var(--text-muted); font-size: 11px;">
+                                            DLsite imports keep JP voice-actor names. Reuse romanizations already known elsewhere (exact JP match).
+                                        </span>
+                                    </div>
+                                    <div class="quick-row" style="margin-top:6px;">
+                                        <button class="btn btn-secondary" @click="previewSeiyuuBackfill" :disabled="!!seiyuuBackfillBusy">
+                                            {{ seiyuuBackfillBusy === 'preview' ? 'Previewing...' : 'Preview' }}
+                                        </button>
+                                        <button class="btn btn-primary" @click="applySeiyuuBackfill"
+                                                :disabled="!!seiyuuBackfillBusy || !seiyuuBackfillPreview || !seiyuuBackfillPreview.items_changed">
+                                            {{ seiyuuBackfillBusy === 'apply' ? 'Applying...' : 'Apply' }}
+                                        </button>
+                                    </div>
+                                    <div v-if="seiyuuBackfillMessage" class="maintenance-ok" style="margin-top:6px">{{ seiyuuBackfillMessage }}</div>
+                                    <div v-if="seiyuuBackfillError" class="maintenance-fail" style="margin-top:6px">{{ seiyuuBackfillError }}</div>
+                                    <div v-if="seiyuuBackfillPreview && seiyuuBackfillPreview.preview && seiyuuBackfillPreview.preview.length" class="seiyuu-preview" style="margin-top:6px;">
+                                        <div class="seiyuu-preview-head">
+                                            {{ seiyuuBackfillPreview.dry_run ? 'Preview · ' : 'Applied · ' }}{{ seiyuuBackfillPreview.names_filled }} name(s) across {{ seiyuuBackfillPreview.items_changed }} item(s)
+                                        </div>
+                                        <div class="seiyuu-preview-list">
+                                            <div v-for="row in seiyuuBackfillPreview.preview" :key="row.item_id" class="seiyuu-preview-row">
+                                                <span class="seiyuu-preview-code">{{ row.product_code || ('#' + row.item_id) }}</span>
+                                                <span class="seiyuu-preview-title">{{ row.title }}</span>
+                                                <span class="seiyuu-preview-diff">
+                                                    <span class="seiyuu-preview-before">{{ row.before.join(', ') }}</span>
+                                                    →
+                                                    <span class="seiyuu-preview-after">{{ row.after.join(', ') }}</span>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
 
                                 <div v-if="seiyuuSuggestions.length" class="seiyuu-suggest-block">
                                     <div class="maintenance-list-title" style="display:flex; align-items:baseline; gap:8px;">
@@ -2913,7 +3031,7 @@
                                  keystroke unlink them from their files. -->
                             <label v-if="selectedItem && selectedItem.is_manual"
                                    class="detail-edit-field detail-edit-wide">
-                                <span class="detail-edit-label">Archive path (.7z / .zip / .rar)</span>
+                                <span class="detail-edit-label">Archive path (.7z / .zip / .rar / .tar)</span>
                                 <div class="detail-edit-with-action">
                                     <input type="text" v-model="detailDraft.archive_path"
                                            placeholder="C:\path\to\file.7z (absolute path)">
@@ -2964,6 +3082,18 @@
                         <div class="detail-meta-row">
                             <span class="detail-meta-label">Files</span>
                             <span class="detail-meta-value">{{ selectedItem.file_count }} file(s)</span>
+                        </div>
+                        <!-- Listen-status quick-edit — click pill to open the
+                             same dropdown used on cards. Hidden on tokuten_audio
+                             rows since those have their own progress surface. -->
+                        <div class="detail-meta-row" v-if="selectedItem.kind !== 'tokuten_audio'">
+                            <span class="detail-meta-label">Listen Status</span>
+                            <span class="detail-meta-value">
+                                <span class="listen-status-pill clickable"
+                                      :class="'listen-' + (selectedItem.listen_status || 'backlog')"
+                                      @click.stop="openListenStatusDropdown(selectedItem.id, selectedItem, $event)"
+                                      title="Click to change">{{ formatListenStatus(selectedItem.listen_status || 'backlog') }}</span>
+                            </span>
                         </div>
                         <!-- Tokuten cross-link: when the tokuten has a vndb_id,
                              show the id (always) and a clickable "open game"
@@ -3020,7 +3150,7 @@
                                     {{ displaySeiyuuAt(selectedItem, idx) || s }}
                                 </span>
                                 <button class="seiyuu-tag-filter"
-                                        @click.stop="filterBySeiyuu(s)"
+                                        @click.stop="filterBySeiyuu(displaySeiyuuAt(selectedItem, idx) || s)"
                                         title="Filter library by this voice actor">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="10" height="10"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
                                 </button>
@@ -3809,6 +3939,17 @@
             </button>
         </div>
 
+        <!-- Listen-status quick-dropdown — drama-CD parallel to play-status. -->
+        <div v-if="listenStatusDropdownFor !== null"
+             v-click-outside="closeListenStatusDropdown"
+             class="play-status-dropdown"
+             :style="{ top: (listenStatusDropdownRect?.top || 0) + 'px', left: (listenStatusDropdownRect?.left || 0) + 'px' }">
+            <button v-for="opt in LISTEN_STATUS_OPTIONS" :key="opt"
+                    @click="selectListenStatusOption(opt)">
+                {{ formatListenStatus(opt) }}
+            </button>
+        </div>
+
         <!-- is_manual filter dropdown — same pattern as play-status dropdown,
              shared across the three subtabs' sidebar pills. -->
         <div v-if="isManualDropdownFor !== null"
@@ -3882,7 +4023,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=144"></script>
+    <script src="/static/js/app.js?v=146"></script>
 </body>
 </html>
 

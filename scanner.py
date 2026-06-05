@@ -3,7 +3,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from config import ARCHIVE_EXTENSIONS, SCAN_PATH
+from config import ARCHIVE_EXTENSIONS, AUDIO_EXTENSIONS, SCAN_PATH
 
 # Regex patterns for extracting product codes from filenames
 # Order matters: more specific patterns first
@@ -79,7 +79,8 @@ def get_part_number(filename: str) -> int | None:
     return None
 
 
-def _iter_archive_files(paths: list[Path], recursive: bool):
+def _iter_scannable_files(paths: list[Path], recursive: bool):
+    scannable = ARCHIVE_EXTENSIONS | AUDIO_EXTENSIONS
     for root in paths:
         if recursive:
             iterator = (p for p in root.rglob("*") if p.is_file())
@@ -87,7 +88,7 @@ def _iter_archive_files(paths: list[Path], recursive: bool):
             iterator = (p for p in root.iterdir() if p.is_file())
 
         for entry in iterator:
-            if entry.suffix.lower() in ARCHIVE_EXTENSIONS:
+            if entry.suffix.lower() in scannable:
                 yield entry
 
 
@@ -133,7 +134,7 @@ def scan_folder_with_progress(
     if not valid_folders:
         raise FileNotFoundError(f"Scan paths do not exist: {', '.join(missing_paths)}")
 
-    entries = list(_iter_archive_files(valid_folders, recursive=recursive))
+    entries = list(_iter_scannable_files(valid_folders, recursive=recursive))
     total_files = len(entries)
 
     items = defaultdict(

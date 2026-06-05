@@ -39,7 +39,10 @@ DLSITE_SITE_SECTIONS = ["maniax", "home", "girls", "comic", "books", "pro"]
 DLSITE_PROXY_URL = os.environ.get("DRAMACD_DLSITE_PROXY", "").strip() or None  # e.g., "http://proxy.example.com:8080" or "socks5://127.0.0.1:1080"
 
 # Supported archive extensions
-ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z"}
+ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z", ".tar"}
+
+# Loose audio files picked up by the scanner (no extraction needed)
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma"}
 
 # Whisper transcription settings
 WHISPER_MODEL = os.environ.get("DRAMACD_WHISPER_MODEL", "small")

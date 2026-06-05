@@ -93,6 +93,20 @@ async def queue_item_extraction(
     }
 
 
+@router.post("/items/{item_id}/import-subtitles")
+async def import_item_subtitles(item_id: int, _auth=Depends(require_api_key)):
+    """Scan this item's extracted tracks for sibling .vtt/.srt scripts and import them as
+    transcript runs (tracks that already have an active transcript are left untouched).
+    Fast - no Whisper. Used to backfill already-extracted works."""
+    await _ensure_pipeline_enabled()
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    from pipeline.subtitle_import import import_bundled_subtitles
+    summary = await import_bundled_subtitles(item_id)
+    return {"status": "ok", "item_id": item_id, **summary}
+
+
 @router.post("/items/{item_id}/autopilot")
 async def queue_item_autopilot(
     item_id: int,
@@ -684,7 +698,22 @@ async def list_item_tracks(item_id: int):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     tracks = await db.get_pipeline_tracks(item_id)
-    return {"item_id": item_id, "tracks": tracks, "total": len(tracks)}
+    # Track rows outlive the extracted files (workspace cleanup, manual
+    # deletes), so report per-track on-disk presence. Player/Atelier use it
+    # to prompt "re-extract" instead of silently failing at play/export time.
+    audio_missing = 0
+    for t in tracks:
+        tp = (t.get("track_path") or "").strip()
+        exists = bool(tp) and Path(tp).is_file()
+        t["file_exists"] = exists
+        if not exists:
+            audio_missing += 1
+    return {
+        "item_id": item_id,
+        "tracks": tracks,
+        "total": len(tracks),
+        "audio_missing": audio_missing,
+    }
 
 
 @router.get("/items/{item_id}/track-groups")
@@ -1452,7 +1481,7 @@ async def export_item_package(
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     try:
-        data, filename = await build_package_zip(
+        data, filename, skipped_audio = await build_package_zip(
             item_id,
             runs=runs,
             include_audio=bool(audio),
@@ -1464,10 +1493,15 @@ async def export_item_package(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    # Audio was requested but some files weren't on disk — tell the UI so it
+    # can warn instead of shipping a silently audio-less "full" package.
+    if skipped_audio:
+        headers["X-DramaCD-Audio-Skipped"] = str(len(skipped_audio))
     return Response(
         content=data,
         media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers=headers,
     )
 
 
@@ -1575,17 +1609,18 @@ def _dir_size_bytes(path: Path) -> int:
 async def _referenced_extract_paths() -> set[str]:
     """Lower-cased absolute paths every track currently points into."""
     refs: set[str] = set()
-    items_page = await db.get_all_items(limit=100000, offset=0)
-    for item in items_page.get("items") or []:
-        tracks = await db.get_pipeline_tracks(int(item["id"]))
-        for t in tracks:
-            for key in ("extract_root", "track_path"):
-                v = t.get(key)
-                if v:
-                    try:
-                        refs.add(str(Path(v).resolve()).lower())
-                    except OSError:
-                        refs.add(str(v).lower())
+    # One query over ALL pipeline_tracks rows. Deliberately NOT routed
+    # through get_all_items(): its default kind filter (drama_cd only)
+    # hid tokuten/manual items from this scan, so their extraction
+    # folders were flagged orphaned — and purge deleted live audio.
+    for t in await db.get_all_pipeline_track_paths():
+        for key in ("extract_root", "track_path"):
+            v = t.get(key)
+            if v:
+                try:
+                    refs.add(str(Path(v).resolve()).lower())
+                except OSError:
+                    refs.add(str(v).lower())
     return refs
 
 

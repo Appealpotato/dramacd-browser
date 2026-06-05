@@ -3,11 +3,14 @@ import json
 import logging
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 
 import database as db
+from database import _basename_lower
 from auth import require_api_key
+from config import ARCHIVE_EXTENSIONS
 from models import FetchMetadataRequest, ScanPathsUpdateRequest, ScanRequest
 from scanner import scan_folder_with_progress
 from scraper import fetch_all_metadata, scrape_progress
@@ -18,6 +21,42 @@ router = APIRouter(prefix="/api")
 
 def _now_iso():
     return datetime.utcnow().isoformat() + "Z"
+
+
+async def _ingest_bundled_package_entry(payload: dict, archive_path: str, size: int) -> str | None:
+    """Turn a scanner-unmatched archive that carries a bundled ``*.package.json`` into a
+    non-DLsite custom (is_manual) item: adopt the package's product_code, register the
+    archive as the item's file, and apply the bundled item-level metadata. Tracks come
+    later from normal extraction (the bundled-package hook re-applies metadata then).
+
+    Returns the product_code it matched, or None if the package declared no usable code."""
+    items = payload.get("items") or []
+    item_payload = next((it for it in items if (it.get("product_code") or "").strip()), None)
+    if not item_payload:
+        return None
+    code = item_payload["product_code"].strip().upper()
+    existing = await db.get_item_by_product_code(code)
+    await db.upsert_item({                            # upsert_item never touches metadata fields
+        "product_code": code,
+        "original_code": None,
+        "confidence": "verified",
+        "files": json.dumps([Path(archive_path).name]),
+        "file_count": 1,
+        "total_size": size,
+        "file_format": json.dumps([]),
+    })
+    await db.set_item_is_manual(code, True)          # never auto-fetch DLsite for this one
+    # Apply the bundled metadata only on FIRST discovery - a re-scan must not clobber
+    # metadata the user has since hand-edited in-app (same "never override" stance as the
+    # subtitle/package import hooks).
+    meta = item_payload.get("metadata")
+    already_has_meta = bool(existing and (existing.get("title") or existing.get("metadata_date")))
+    if meta and not already_has_meta:
+        try:
+            await db.update_item_metadata(code, meta)
+        except Exception as exc:
+            logger.warning(f"bundled metadata apply failed for {code}: {exc}")
+    return code
 
 
 # Track scan progress
@@ -158,6 +197,11 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
     _log_job_event("scan", "started", job_id=job_id, paths=scan_paths, recursive=recursive)
 
     try:
+        # Snapshot BEFORE clearing: which files already belong to an item, and which were
+        # already shelved as unmatched last scan. Both let the bundled-package peek below
+        # skip everything except genuinely new archives.
+        claimed_basenames = await db.get_all_claimed_basenames()
+        prev_unmatched_keys = await db.get_unmatched_file_keys()
         await db.clear_unmatched_files()
         ignored_codes = await db.get_ignored_codes()
 
@@ -222,8 +266,47 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                 }
             )
 
+        # Non-DLsite fallthrough: an unmatched archive (no DLsite code in its name) may
+        # still declare its own identity + metadata via a bundled *.package.json. If so,
+        # ingest it as a non-DLsite custom entry; otherwise shelve it as unmatched as before.
+        # The filename scan is done by now, so move the progress UI off its (throttled) last
+        # value while this post-pass runs - and check the stop flag so it stays cancellable.
+        from pipeline.package_import import find_package_in_archive
+        if job_id:
+            await db.update_job(job_id, current="checking new archives…",
+                                processed_files=result["stats"].get("total_files", 0))
+        package_matched = 0
+        skipped_owned = 0
         for uf in result["unmatched"]:
-            await db.add_unmatched_file(uf["filename"], uf["filepath"], uf["size"])
+            if _scan_stop_event.is_set():
+                break
+            fp = uf["filepath"]
+            # Already owned by an existing entry (e.g. a manual/custom item)? Then it isn't
+            # unmatched at all - keep it out of the list and don't peek it.
+            if _basename_lower(fp) in claimed_basenames:
+                skipped_owned += 1
+                continue
+            # Already seen as unmatched on a prior scan (same path+size)? It has no bundled
+            # package - keep it unmatched but DON'T re-peek. Only genuinely new archives are
+            # peeked, so a steady re-scan does ~zero archive reads here.
+            seen_before = (str(fp).lower(), int(uf.get("size") or 0)) in prev_unmatched_keys
+            code = None
+            if not seen_before and Path(fp).suffix.lower() in ARCHIVE_EXTENSIONS:
+                try:
+                    payload = await asyncio.to_thread(find_package_in_archive, fp)
+                    if payload:
+                        code = await _ingest_bundled_package_entry(payload, fp, uf["size"])
+                except Exception as exc:
+                    logger.warning(f"bundled-package fallthrough failed for {fp}: {exc}")
+            if code:
+                package_matched += 1
+                logger.info(f"Scan: non-DLsite archive {Path(fp).name} -> {code} (bundled package metadata)")
+            else:
+                await db.add_unmatched_file(uf["filename"], uf["filepath"], uf["size"])
+        if package_matched:
+            logger.info(f"Scan: {package_matched} non-DLsite archive(s) matched via bundled package")
+        if skipped_owned:
+            logger.info(f"Scan: {skipped_owned} archive(s) already owned by an entry - kept out of unmatched")
 
         stats = result["stats"]
         scan_state["result"] = stats
@@ -386,13 +469,15 @@ async def run_fetch_metadata(product_codes: list[str] | None = None, force: bool
     if product_codes is None:
         result = await db.get_all_items(limit=10000)
         all_items = result["items"]
+        # Manual/custom entries (MAN-*/TKT-*) have no DLsite page — never auto-fetch them.
+        scanned_items = [item for item in all_items if not item.get("is_manual")]
         if force:
-            product_codes = [item["product_code"] for item in all_items if item.get("product_code")]
+            product_codes = [item["product_code"] for item in scanned_items if item.get("product_code")]
         else:
             # Backfill mode: include items missing JP metadata or EN title/tag caches.
             product_codes = [
                 item["product_code"]
-                for item in all_items
+                for item in scanned_items
                 if item.get("product_code")
                 and (
                     not item.get("title")

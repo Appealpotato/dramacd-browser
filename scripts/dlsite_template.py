@@ -4,7 +4,7 @@ Usage:
     python scripts/dlsite_template.py RJ210477
     python scripts/dlsite_template.py RJ210477 --tag-lang both --stdout
     python scripts/dlsite_template.py RJ210477 --password mypw \
-        --mediafire https://mediafire.com/... --pixeldrain https://pixeldrain.com/...
+        --gofile https://gofile.io/... --buzzheavier https://buzzheavier.com/...
 """
 
 from __future__ import annotations
@@ -212,8 +212,8 @@ def render_post(
     code: str,
     tag_lang: str = "en",
     password: str = "{PASSWORD}",
-    mediafire_url: str = "{MEDIAFIRE_URL}",
-    pixeldrain_url: str = "{PIXELDRAIN_URL}",
+    gofile_url: str = "{GOFILE_URL}",
+    buzzheavier_url: str = "{buzzheavier_URL}",
 ) -> str:
     cover = _normalize_cover_url(metadata.get("cover_url"))
     title_ja = (metadata.get("title") or "").strip()
@@ -289,9 +289,6 @@ def render_post(
     return (
         f"[center][img]{cover}[/img]\n"
         "\n"
-        "[b][color=#E8486A]Note:[/color][/b] This release includes an unofficial [b]transcript[/b] and [b]translation[/b] (AI-assisted). Both JP and EN SRT subtitle files are included.\n"
-        "The transcription and translation are provided by me.\n"
-        "\n"
         "[color=#E8486A]⸻⸻⸻⸻⸻⸻⸻⸻⸻⸻[/color]\n"
         "\n"
         f"[quote][color=#E8486A][b]English title:[/b][/color] {title_en}\n"
@@ -307,14 +304,13 @@ def render_post(
         "\n"
         "[color=#E8486A][b]✦ DOWNLOAD ✦[/b][/color]\n"
         "\n"
-        f"[quote][HIDEGROUP=55][color=#E8486A][b]Password:[/b][/color] [b]{password}@anime-sharing.com[/b]\n"
-        f"[url={mediafire_url}]mediafire[/url] | [url={pixeldrain_url}]pixeldrain[/url][/HIDEGROUP][/quote]\n"
+        f"[quote][HIDE][HIDEGROUP=55][color=#E8486A][b]Password:[/b][/color] [icode]{password}[/icode]\n"
+        f"[url={gofile_url}]gofile[/url] | [url={buzzheavier_url}]buzzheavier[/url][/HIDEGROUP][/HIDE][/quote]\n"
         "\n"
         f"{tracklist_block}"
         "[spoiler=Description (EN)]\n"
         f"[left]{en_block}[/left]\n"
         "[/spoiler]\n"
-        "\n"
         "[spoiler=説明 (JA)]\n"
         f"[left]{description_ja}[/left]\n"
         "[/spoiler]\n"
@@ -339,14 +335,14 @@ def main() -> int:
         help="Archive password (left as {PASSWORD} placeholder if omitted)",
     )
     parser.add_argument(
-        "--mediafire",
-        default="{MEDIAFIRE_URL}",
-        help="Mediafire download URL (left as placeholder if omitted)",
+        "--gofile",
+        default="{GOFILE_URL}",
+        help="gofile download URL (left as placeholder if omitted)",
     )
     parser.add_argument(
-        "--pixeldrain",
-        default="{PIXELDRAIN_URL}",
-        help="Pixeldrain download URL (left as placeholder if omitted)",
+        "--buzzheavier",
+        default="{buzzheavier_URL}",
+        help="buzzheavier download URL (left as placeholder if omitted)",
     )
     args = parser.parse_args()
 
@@ -361,8 +357,8 @@ def main() -> int:
         code=code,
         tag_lang=args.tag_lang,
         password=args.password,
-        mediafire_url=args.mediafire,
-        pixeldrain_url=args.pixeldrain,
+        gofile_url=args.gofile,
+        buzzheavier_url=args.buzzheavier,
     )
     output = (
         f"Thread title: {title}\n"

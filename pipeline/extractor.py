@@ -1,16 +1,19 @@
+import contextlib
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import tarfile
 import wave
 import zipfile
 from datetime import datetime
 from pathlib import Path
 
 import database as db
-from config import ARCHIVE_EXTENSIONS, PIPELINE_EXTRACT_DIR
+from config import ARCHIVE_EXTENSIONS, PIPELINE_EXTRACT_DIR, PIPELINE_WORK_DIR
 from scanner import extract_product_code
 
 logger = logging.getLogger(__name__)
@@ -18,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Modern multi-volume RAR style: ``name.part1.rar`` / ``name.part2.rar``…
 # Only ``.partN.rar`` matters because ARCHIVE_EXTENSIONS limits scanning to
-# .zip / .rar / .7z — old-style .r00/.r01 continuation files and .7z.001
-# splits are never picked up by the scanner in the first place.
+# .zip / .rar / .7z / .tar — old-style .r00/.r01 continuation files and
+# .7z.001 splits are never picked up by the scanner in the first place.
 _PART_RAR_RE = re.compile(r"\.part(\d+)\.rar$", re.IGNORECASE)
 
 
@@ -97,7 +100,7 @@ AUDIO_EXTENSIONS = {
 
 
 def get_runtime_archive_support() -> list[str]:
-    support = ["zip"]
+    support = ["zip", "tar"]
     if _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH"):
         support.extend(["rar", "7z"])
     return support
@@ -188,6 +191,34 @@ def _safe_extract_zip(archive_path: Path, target_dir: Path):
                 shutil.copyfileobj(src, dst)
 
 
+def _safe_extract_tar(archive_path: Path, target_dir: Path):
+    """Extract a .tar (or auto-detected tar.gz/bz2/xz) with path-traversal
+    guards. Skips symlinks, hardlinks, and device entries — drama-CD tars
+    only ever contain regular files and directories, and refusing the
+    rest avoids the classic tar-slip footguns."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_root = str(target_dir.resolve())
+    with tarfile.open(archive_path, "r:*") as tf:
+        for member in tf.getmembers():
+            member_path = Path(member.name)
+            if member_path.is_absolute():
+                continue
+            candidate = (target_dir / member_path).resolve()
+            if not str(candidate).startswith(resolved_root):
+                continue
+            if member.isdir():
+                candidate.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                continue
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            with src, candidate.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+
 def _extract_with_7z(archive_path: Path, target_dir: Path):
     target_dir.mkdir(parents=True, exist_ok=True)
     exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
@@ -212,6 +243,9 @@ def _extract_archive(archive_path: Path, target_dir: Path):
     ext = archive_path.suffix.lower()
     if ext == ".zip":
         _safe_extract_zip(archive_path, target_dir)
+        return
+    if ext == ".tar":
+        _safe_extract_tar(archive_path, target_dir)
         return
     if ext in {".rar", ".7z"}:
         _extract_with_7z(archive_path, target_dir)
@@ -247,6 +281,7 @@ def _resolve_archives_for_item(item: dict, scan_paths: list[str]) -> list[Path]:
             pass
     wanted_names.difference_update(absolute_only_names)
 
+    scannable = ARCHIVE_EXTENSIONS | AUDIO_EXTENSIONS
     for raw_root in scan_paths:
         root = Path(raw_root).expanduser()
         if not root.exists() or not root.is_dir():
@@ -254,7 +289,7 @@ def _resolve_archives_for_item(item: dict, scan_paths: list[str]) -> list[Path]:
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
-            if path.suffix.lower() not in ARCHIVE_EXTENSIONS:
+            if path.suffix.lower() not in scannable:
                 continue
 
             include = False
@@ -305,10 +340,23 @@ def _resolve_archives_for_item(item: dict, scan_paths: list[str]) -> list[Path]:
     return filtered
 
 
-def list_archive_contents(archive_path: Path) -> list[dict]:
-    """Run ``7z l -slt`` to enumerate the files inside an archive (without
-    extracting). Returns ``[{path, size}]`` sorted by path, directories
-    filtered out. Used by the Workshop Archive panel's inline viewer."""
+def _list_tar_contents(archive_path: Path) -> list[dict]:
+    """tarfile-based equivalent of the 7z listing path. Mirrors the
+    ``[{path, size}]`` shape returned by ``list_archive_contents`` so the
+    caller doesn't care which backend produced it."""
+    files: list[dict] = []
+    with tarfile.open(archive_path, "r:*") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            files.append({"path": member.name, "size": int(member.size or 0)})
+    return files
+
+
+def _list_with_7z(archive_path: Path) -> list[dict]:
+    """Raw ``7z l -slt`` listing for .zip/.rar/.7z. Returns ``[{path, size}]``
+    with directories and the archive's own self-record filtered out — but
+    *not* sorted or __MACOSX-filtered (those happen in the caller)."""
     exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
@@ -359,14 +407,285 @@ def list_archive_contents(archive_path: Path) -> list[dict]:
         except ValueError:
             size = 0
         files.append({"path": path, "size": size})
-    files.sort(key=lambda f: f["path"].lower())
     return files
 
 
+def _find_single_inner_tar(files: list[dict]) -> str | None:
+    """If a wrapper archive contains exactly one top-level ``.tar`` file
+    (and nothing else), return that tar's in-archive name. This is the
+    common DLsite layout where the work is packed as ``RJ123.tar`` inside
+    a ``RJ123.7z`` for compression — the user wants to see the tar's
+    contents, not the useless single-entry wrapper listing."""
+    if len(files) != 1:
+        return None
+    only = files[0]["path"]
+    if not only.lower().endswith(".tar"):
+        return None
+    # Reject anything nested in a subdirectory — only top-level wrappers
+    # qualify. A ``data/foo.tar`` arrangement could legitimately sit
+    # alongside other content the user wants to see.
+    if "/" in only or "\\" in only:
+        return None
+    return only
+
+
+@contextlib.contextmanager
+def _open_nested_tar(outer: Path, inner_tar_name: str):
+    """Yield a streaming ``tarfile.TarFile`` reading the nested tar named
+    ``inner_tar_name`` inside the wrapper archive ``outer``.
+
+    Uses ``zipfile.open`` for zip wrappers (no external dep) and
+    ``7z e -so`` piping for rar/7z. Stream mode (``r|*``) means callers
+    can only iterate members forward — they can't seek back."""
+    outer_ext = outer.suffix.lower()
+    if outer_ext == ".zip":
+        zf = zipfile.ZipFile(outer, "r")
+        try:
+            target = next(
+                (info for info in zf.infolist() if _decode_zip_filename(info) == inner_tar_name),
+                None,
+            )
+            if target is None:
+                raise RuntimeError(f"Nested tar {inner_tar_name} not found in {outer.name}")
+            inner = zf.open(target, "r")
+            try:
+                with tarfile.open(fileobj=inner, mode="r|*") as tf:
+                    yield tf
+            finally:
+                inner.close()
+        finally:
+            zf.close()
+        return
+
+    exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
+    if not exe:
+        raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
+    proc = subprocess.Popen(
+        [exe, "e", "-so", "-sccUTF-8", str(outer), inner_tar_name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        with tarfile.open(fileobj=proc.stdout, mode="r|*") as tf:
+            yield tf
+    finally:
+        # When callers break early (e.g. found their member) 7z will block
+        # writing to the pipe; terminate it so we don't leak the process.
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except Exception:
+            pass
+        try:
+            if proc.stdout:
+                proc.stdout.close()
+            if proc.stderr:
+                proc.stderr.close()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+
+def _list_inner_tar(outer: Path, inner_tar_name: str) -> list[dict]:
+    files: list[dict] = []
+    with _open_nested_tar(outer, inner_tar_name) as tf:
+        for member in tf:
+            if not member.isfile():
+                continue
+            files.append({"path": member.name, "size": int(member.size or 0)})
+    return files
+
+
+_LISTING_CACHE_VERSION = 1
+
+
+def _archive_listing_cache_path(archive_path: Path) -> Path:
+    try:
+        key_input = str(archive_path.resolve())
+    except OSError:
+        key_input = str(archive_path)
+    key = hashlib.sha1(key_input.encode("utf-8")).hexdigest()
+    return PIPELINE_WORK_DIR / "archive-listings" / f"{key}.json"
+
+
+def _read_cached_listing(archive_path: Path) -> dict | None:
+    """Return the cached listing dict for ``archive_path`` if it's still
+    valid (same size + mtime as the file on disk). Otherwise ``None``."""
+    cache = _archive_listing_cache_path(archive_path)
+    if not cache.exists():
+        return None
+    try:
+        st = archive_path.stat()
+        meta = json.loads(cache.read_text("utf-8"))
+    except Exception:
+        return None
+    if meta.get("v") != _LISTING_CACHE_VERSION:
+        return None
+    if meta.get("size") != st.st_size:
+        return None
+    if int(meta.get("mtime", 0)) != int(st.st_mtime):
+        return None
+    return meta
+
+
+def _write_cached_listing(
+    archive_path: Path, files: list[dict], *, wrapper_tar: str | None
+) -> None:
+    cache = _archive_listing_cache_path(archive_path)
+    try:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        st = archive_path.stat()
+        cache.write_text(
+            json.dumps({
+                "v": _LISTING_CACHE_VERSION,
+                "size": st.st_size,
+                "mtime": int(st.st_mtime),
+                "wrapper_tar": wrapper_tar,
+                "files": files,
+            }, ensure_ascii=False),
+            "utf-8",
+        )
+    except Exception as exc:
+        logger.warning("Failed to write listing cache for %s: %s", archive_path.name, exc)
+
+
+def _filter_macosx(files: list[dict]) -> list[dict]:
+    """Hide the AppleDouble resource-fork entries macOS zipping leaves in
+    ``__MACOSX/`` — they're never useful content, just ``._`` duplicates of
+    the real files. Keep them only if the archive contains nothing else,
+    so a __MACOSX-only archive still shows something instead of looking empty."""
+    def _under_macosx(p: str) -> bool:
+        return "__MACOSX" in p.replace("\\", "/").split("/")
+    non_macosx = [f for f in files if not _under_macosx(f["path"])]
+    return non_macosx if non_macosx else files
+
+
+def list_archive_contents(archive_path: Path) -> list[dict]:
+    """Enumerate the files inside an archive without extracting. Returns
+    ``[{path, size}]`` sorted by path, directories filtered out. Used by
+    the Workshop Archive panel's inline viewer.
+
+    ``.tar`` is handled in-process via :mod:`tarfile`. Other archives go
+    through ``7z l -slt`` — with a transparent unwrap step for the common
+    DLsite layout of a single ``.tar`` packed inside ``.zip/.rar/.7z``."""
+    ext = archive_path.suffix.lower()
+
+    if ext == ".tar":
+        files = _list_tar_contents(archive_path)
+        files.sort(key=lambda f: f["path"].lower())
+        return _filter_macosx(files)
+
+    cached = _read_cached_listing(archive_path)
+    if cached is not None:
+        return cached.get("files") or []
+
+    outer_files = _list_with_7z(archive_path)
+    wrapper_tar = _find_single_inner_tar(outer_files)
+    if wrapper_tar is not None:
+        try:
+            files = _list_inner_tar(archive_path, wrapper_tar)
+        except Exception as exc:
+            logger.warning(
+                "Failed to drill into nested tar %s in %s: %s",
+                wrapper_tar, archive_path.name, exc,
+            )
+            files = outer_files
+            wrapper_tar = None
+    else:
+        files = outer_files
+
+    files.sort(key=lambda f: f["path"].lower())
+    files = _filter_macosx(files)
+
+    if wrapper_tar is not None:
+        # Cache only the expensive case: streaming a tar through a 7z/rar
+        # wrapper decompresses the whole thing. Plain top-level listings
+        # via ``7z l`` are already fast and don't need disk caching.
+        _write_cached_listing(archive_path, files, wrapper_tar=wrapper_tar)
+
+    return files
+
+
+def _stream_member_from_nested_tar(
+    archive_path: Path, wrapper_tar: str, inner_path: str
+) -> bytes:
+    """Pull a single member out of a tar wrapped inside ``archive_path``.
+    Streams via :func:`_open_nested_tar` so the 1.9 GB decompression happens
+    only over the bytes leading up to the target member."""
+    normalized = inner_path.replace("\\", "/").lstrip("/")
+    target_base = Path(normalized).name
+    with _open_nested_tar(archive_path, wrapper_tar) as tf:
+        for member in tf:
+            if not member.isfile():
+                continue
+            if member.name == normalized or Path(member.name).name == target_base:
+                src = tf.extractfile(member)
+                if src is None:
+                    continue
+                with src:
+                    return src.read()
+    raise RuntimeError(
+        f"Member {inner_path} not found inside nested tar {wrapper_tar}"
+    )
+
+
 def stream_archive_file(archive_path: Path, inner_path: str) -> bytes:
-    """Extract a single file from an archive to memory via ``7z e -so``.
-    Used by the archive-thumb endpoint to pull just one image out of the
-    source archive without unpacking the whole thing."""
+    """Extract a single file from an archive to memory. Used by the
+    archive-thumb endpoint to pull one image out without unpacking the
+    whole archive.
+
+    ``.tar`` reads in-process via :mod:`tarfile`. ``.zip/.rar/.7z`` go
+    through ``7z e -so`` — unless the wrapper just contains a single
+    nested ``.tar`` (common DLsite layout), in which case the requested
+    member is streamed out of that nested tar instead."""
+    ext = archive_path.suffix.lower()
+    if ext == ".tar":
+        normalized = inner_path.replace("\\", "/").lstrip("/")
+        with tarfile.open(archive_path, "r:*") as tf:
+            try:
+                member = tf.getmember(normalized)
+            except KeyError:
+                # Fall back to a basename match — 7z accepts a bare
+                # filename and the thumb endpoint sometimes passes one.
+                target_base = Path(normalized).name
+                member = next(
+                    (m for m in tf.getmembers() if m.isfile() and Path(m.name).name == target_base),
+                    None,
+                )
+                if member is None:
+                    raise RuntimeError(f"tar stream failed for {inner_path}: member not found")
+            if not member.isfile():
+                raise RuntimeError(f"tar stream failed for {inner_path}: not a regular file")
+            src = tf.extractfile(member)
+            if src is None:
+                raise RuntimeError(f"tar stream failed for {inner_path}: unreadable")
+            with src:
+                return src.read()
+
+    cached = _read_cached_listing(archive_path)
+    wrapper_tar = cached.get("wrapper_tar") if cached else None
+    if wrapper_tar is None and cached is None:
+        # No cache yet — do a cheap top-level listing to detect a wrapper.
+        # ``7z l`` reads the central directory only, so this is fast even
+        # for multi-GB archives.
+        try:
+            wrapper_tar = _find_single_inner_tar(_list_with_7z(archive_path))
+        except Exception:
+            wrapper_tar = None
+
+    if wrapper_tar:
+        return _stream_member_from_nested_tar(archive_path, wrapper_tar, inner_path)
+
     exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
@@ -460,11 +779,25 @@ def _probe_audio_metadata(path: Path) -> tuple[dict, str | None]:
 
 
 def _index_tracks_from_dir(item_id: int, extract_root: Path, archives: list[Path]) -> list[dict]:
-    tracks = []
     archive_map = {p.name: str(p) for p in archives}
-    for idx, path in enumerate(sorted(extract_root.rglob("*")), start=1):
-        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
-            continue
+
+    # macOS zipping drops AppleDouble resource forks into __MACOSX/, so every
+    # real track gets a phantom "._track" sibling that would index as a
+    # duplicate. Drop __MACOSX entries — but only when there's real audio
+    # elsewhere, so an archive that somehow contains __MACOSX-only audio still
+    # produces tracks instead of going empty.
+    all_audio = [
+        p for p in sorted(extract_root.rglob("*"))
+        if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    non_macosx = [
+        p for p in all_audio
+        if "__MACOSX" not in p.relative_to(extract_root).parts
+    ]
+    audio_paths = non_macosx if non_macosx else all_audio
+
+    tracks = []
+    for idx, path in enumerate(audio_paths, start=1):
         rel_parts = path.relative_to(extract_root).parts
         archive_name = rel_parts[0] if rel_parts else ""
         probe, probe_error = _probe_audio_metadata(path)
@@ -539,12 +872,44 @@ async def run_extraction_job(job_id: int):
         await db.update_job(
             job_id,
             status="failed",
-            error="No source archives resolved for item from scan paths",
+            error="No source files resolved for item from scan paths",
             stopped=1,
             finished_at=datetime.now().isoformat(),
         )
-        await db.append_job_event(job_id, "error", "Extraction failed", {"error": "source_archive_not_found"})
+        await db.append_job_event(job_id, "error", "Extraction failed", {"error": "source_files_not_found"})
         return
+
+    # If a source archive is NEWER than what we extracted, the archive changed since the
+    # last run (e.g. the merged blob was replaced with proper split tracks). Reusing the
+    # old extraction would keep the stale tracks forever, so invalidate the reuse and
+    # re-extract from scratch - no --force needed.
+    if reused_existing:
+        try:
+            # Compare against extracted DIRECTORY mtimes (= when we last extracted), NOT
+            # file mtimes: 7z restores each file's archive-internal date, which is usually
+            # OLDER than the .7z container, so file mtimes would trip a re-extract every
+            # run. Directory mtimes are stamped at extraction time, so they're the right
+            # "last extracted" signal.
+            extracted_when = max(
+                (p.stat().st_mtime for p in [extract_root, *extract_root.rglob("*")] if p.is_dir()),
+                default=0.0,
+            )
+            newest_archive = max(
+                (a.stat().st_mtime for a in archives if a.exists()),
+                default=0.0,
+            )
+            if newest_archive > extracted_when:
+                reused_existing = False
+                shutil.rmtree(extract_root, ignore_errors=True)
+                extract_root.mkdir(parents=True, exist_ok=True)
+                await db.append_job_event(
+                    job_id,
+                    "info",
+                    "Source archive is newer than the extraction - re-extracting",
+                    {"extract_root": str(extract_root)},
+                )
+        except Exception:
+            pass
 
     await db.update_job(job_id, total=len(archives), completed=0, current=archives[0].name)
 
@@ -562,9 +927,14 @@ async def run_extraction_job(job_id: int):
         await db.update_job(job_id, completed=completed, current=None)
     else:
         for archive in archives:
-            archive_target = extract_root / archive.name
             try:
-                _extract_archive(archive, archive_target)
+                if archive.suffix.lower() in AUDIO_EXTENSIONS:
+                    loose_dir = extract_root / "loose"
+                    loose_dir.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(archive, loose_dir / archive.name)
+                else:
+                    archive_target = extract_root / archive.name
+                    _extract_archive(archive, archive_target)
                 completed += 1
                 await db.update_job(job_id, completed=completed, current=archive.name)
             except Exception as exc:
@@ -578,6 +948,46 @@ async def run_extraction_job(job_id: int):
 
     tracks = _index_tracks_from_dir(item_id=item_id, extract_root=extract_root, archives=archives)
     track_count = await db.replace_pipeline_tracks_for_item(item_id, tracks)
+
+    # If the release shipped .vtt/.srt scripts next to the audio, import them as transcript
+    # runs so Whisper can be skipped. Fully guarded - must never affect extraction outcome.
+    try:
+        from pipeline.subtitle_import import import_bundled_subtitles
+        sub_summary = await import_bundled_subtitles(item_id)
+        if sub_summary.get("imported"):
+            await db.append_job_event(
+                job_id, "info", f"Imported {sub_summary['imported']} bundled subtitle(s)",
+                {"item_id": item_id, **sub_summary},
+            )
+    except Exception as sub_err:  # pragma: no cover - defensive
+        try:
+            await db.append_job_event(
+                job_id, "info", "Bundled-subtitle import skipped (error)",
+                {"item_id": item_id, "error": str(sub_err)},
+            )
+        except Exception:
+            pass
+
+    # If the release shipped a producer-preprocessed <CODE>.package.json (split tracks +
+    # per-track JA transcript + prefetched metadata), ingest it so we skip DLsite + Whisper.
+    # Idempotent and fully guarded - must never affect extraction outcome.
+    try:
+        from pipeline.package_import import import_bundled_package
+        pkg_summary = await import_bundled_package(item_id, extract_root)
+        if pkg_summary.get("imported"):
+            await db.append_job_event(
+                job_id, "info",
+                f"Imported bundled package ({pkg_summary['transcript_runs_created']} transcript run(s))",
+                {"item_id": item_id, **pkg_summary},
+            )
+    except Exception as pkg_err:  # pragma: no cover - defensive
+        try:
+            await db.append_job_event(
+                job_id, "info", "Bundled-package import skipped (error)",
+                {"item_id": item_id, "error": str(pkg_err)},
+            )
+        except Exception:
+            pass
 
     status = "completed" if completed > 0 else "failed"
     await db.update_job(

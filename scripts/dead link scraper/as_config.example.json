@@ -1,0 +1,9 @@
+{
+  "forum_urls": [
+    "https://www.anime-sharing.com/forums/otome-doujinshi-voices-misc.154/"
+  ],
+  "max_pages": 42,
+  "delay": 1.5,
+  "jitter": 0.5,
+  "cookie": "xf_user=...; xf_session=...;  PASTE_FULL_COOKIE_HEADER_HERE"
+}
