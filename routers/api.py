@@ -3,6 +3,7 @@ import base64
 import binascii
 import json
 import httpx
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
@@ -1360,6 +1361,109 @@ async def upload_cover_from_url(item_id: int, payload: dict, _auth=Depends(requi
     if not cover_local:
         raise HTTPException(status_code=502, detail="Cover download failed")
     return await db.get_item(item_id)
+
+
+def _media_url(path: str) -> str:
+    """media_assets.path → browser URL. Two historical formats coexist:
+    'data/covers/X.jpg' (project-root-relative; metadata apply + cover
+    uploads) and 'tokutens/5/gallery/x.jpg' (COVERS_DIR-relative; tokuten
+    scanner). Both live under data/covers, served by the /covers mount."""
+    p = (path or "").replace("\\", "/")
+    if p.startswith("data/covers/"):
+        p = p[len("data/covers/"):]
+    return "/covers/" + p
+
+
+async def _item_media_rows(conn, item: dict) -> list[dict]:
+    """Gallery rows for an items row — its own media plus, for tokuten
+    cards, the linked tokutens row's media (the scanner writes there)."""
+    parents = [("item", item["id"])]
+    if item.get("tokuten_id"):
+        parents.append(("tokuten", item["tokuten_id"]))
+    out = []
+    for parent_kind, parent_id in parents:
+        cur = await conn.execute(
+            """SELECT id, parent_kind, parent_id, path, role, sort_order
+               FROM media_assets
+               WHERE parent_kind = ? AND parent_id = ?
+               ORDER BY sort_order ASC, id ASC""",
+            (parent_kind, parent_id),
+        )
+        for row in await cur.fetchall():
+            entry = dict(row)
+            entry["url"] = _media_url(entry["path"])
+            out.append(entry)
+    return out
+
+
+@router.get("/items/{item_id}/media")
+async def list_item_media(item_id: int):
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    conn = await db.get_db()
+    try:
+        media = await _item_media_rows(conn, item)
+    finally:
+        await conn.close()
+    return {"media": media}
+
+
+async def _get_owned_media(conn, item: dict, media_id: int):
+    """Fetch a media_assets row only if it belongs to this item (directly
+    or via its linked tokuten)."""
+    cur = await conn.execute("SELECT * FROM media_assets WHERE id = ?", (media_id,))
+    row = await cur.fetchone()
+    if not row:
+        return None
+    owned = (row["parent_kind"] == "item" and row["parent_id"] == item["id"]) or (
+        row["parent_kind"] == "tokuten" and row["parent_id"] == item.get("tokuten_id")
+    )
+    return dict(row) if owned else None
+
+
+@router.post("/items/{item_id}/media/{media_id}/set-cover")
+async def set_cover_from_media(item_id: int, media_id: int, _auth=Depends(require_api_key)):
+    """Promote a gallery image to the entry's primary cover. The file
+    already lives under data/covers, so this is just a pointer update (the
+    old cover file stays on disk and remains reachable via the gallery)."""
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    conn = await db.get_db()
+    try:
+        media = await _get_owned_media(conn, item, media_id)
+        if not media:
+            raise HTTPException(status_code=404, detail="Media not found for this item")
+        if item.get("tokuten_id"):
+            await conn.execute(
+                "UPDATE tokutens SET cover_local = ?, updated_at = ? WHERE id = ?",
+                (media["path"], datetime.now().isoformat(), item["tokuten_id"]),
+            )
+            await conn.commit()
+    finally:
+        await conn.close()
+    return await db.set_item_cover(item_id, media["path"])
+
+
+@router.delete("/items/{item_id}/media/{media_id}")
+async def delete_item_media(item_id: int, media_id: int, _auth=Depends(require_api_key)):
+    """Remove a gallery row. The image file stays on disk — it may still be
+    referenced as a primary cover, and disk is cheap; only the gallery
+    listing goes away."""
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    conn = await db.get_db()
+    try:
+        media = await _get_owned_media(conn, item, media_id)
+        if not media:
+            raise HTTPException(status_code=404, detail="Media not found for this item")
+        await conn.execute("DELETE FROM media_assets WHERE id = ?", (media_id,))
+        await conn.commit()
+    finally:
+        await conn.close()
+    return {"deleted": media_id}
 
 
 @router.post("/items/{item_id}/refresh-metadata")

@@ -15,12 +15,16 @@ import database as db
 import metadata_sources
 from auth import require_api_key
 from metadata_sources.base import SourceError
+from metadata_sources.merge import merge_metadata
 from models import (
     MetadataApplyRequest,
+    MetadataFetchMultiRequest,
     MetadataFetchRequest,
     MetadataSearchRequest,
 )
 from scraper import download_cover
+
+MAX_MULTI_FETCH = 20
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/metadata")
@@ -57,6 +61,49 @@ async def fetch_url(payload: MetadataFetchRequest):
     return {"metadata": meta}
 
 
+@router.post("/fetch-multi")
+async def fetch_multi(payload: MetadataFetchMultiRequest):
+    """Fetch several volumes (any mix of supported sources) and merge them
+    into one normalized payload. Preview only — nothing is written. Partial
+    failures degrade to per-URL errors as long as at least one volume
+    fetches."""
+    urls = [u.strip() for u in (payload.urls or []) if u and u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="At least one URL is required")
+    if len(urls) > MAX_MULTI_FETCH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many URLs ({len(urls)}); max {MAX_MULTI_FETCH} per fetch",
+        )
+    pairs = []
+    for url in urls:
+        source = metadata_sources.match_url(url)
+        if not source:
+            raise HTTPException(
+                status_code=400, detail=f"URL doesn't match a supported source: {url}"
+            )
+        pairs.append((source, url))
+
+    errors: list[str] = []
+    metas: list[dict] = []
+    async with httpx.AsyncClient() as client:
+        gathered = await asyncio.gather(
+            *(source.fetch_by_url(client, url) for source, url in pairs),
+            return_exceptions=True,
+        )
+    for (source, url), outcome in zip(pairs, gathered):
+        if isinstance(outcome, Exception):
+            logger.warning(f"[metadata] fetch-multi failed for {url}: {outcome}")
+            errors.append(f"{url}: {outcome}")
+        else:
+            metas.append(outcome)
+    if not metas:
+        raise HTTPException(
+            status_code=502, detail="All fetches failed: " + " / ".join(errors)
+        )
+    return {"metadata": merge_metadata(metas), "fetched": len(metas), "errors": errors}
+
+
 @router.post("/search")
 async def search(payload: MetadataSearchRequest):
     """Search one source (payload.source) or all searchable sources in
@@ -90,24 +137,38 @@ async def search(payload: MetadataSearchRequest):
     return {"results": results, "errors": errors}
 
 
-def _build_source_note(meta: dict) -> str:
-    """One-line provenance stamp: price/catalog/JAN/maker + URL + fetch date.
-    Goes into notes so the description stays clean prose."""
+def _note_line(meta: dict, include_title: bool = False) -> str:
     parts = [f"[{meta.get('source', '?')}]"]
+    if include_title and meta.get("title"):
+        parts.append(meta["title"])
     if meta.get("price"):
         parts.append(meta["price"])
     if meta.get("catalog_number"):
         parts.append(f"品番 {meta['catalog_number']}")
     if meta.get("jan"):
         parts.append(f"JAN {meta['jan']}")
-    if meta.get("maker"):
+    if meta.get("maker") and not include_title:
         parts.append(meta["maker"])
-    if meta.get("series"):
+    if meta.get("series") and not include_title:
         parts.append(f"シリーズ: {meta['series']}")
+    if meta.get("release_date") and include_title:
+        parts.append(meta["release_date"])
     if meta.get("source_url"):
         parts.append(meta["source_url"])
-    parts.append(f"fetched {datetime.now().strftime('%Y-%m-%d')}")
     return " ・ ".join(parts)
+
+
+def _build_source_note(meta: dict) -> str:
+    """Provenance stamp for notes. Single fetch: one line with
+    price/catalog/JAN/maker + URL + fetch date. Multi-volume merge: one
+    line per volume (title + identifiers) so nothing per-volume is lost."""
+    volumes = (meta.get("extra") or {}).get("volumes") or []
+    fetched = f"fetched {datetime.now().strftime('%Y-%m-%d')}"
+    if volumes:
+        lines = [_note_line(v, include_title=True) for v in volumes]
+        lines.append(f"({len(volumes)} volumes ・ {fetched})")
+        return "\n".join(lines)
+    return _note_line(meta) + f" ・ {fetched}"
 
 
 def _append_note(existing: str | None, line: str) -> str:
@@ -124,6 +185,77 @@ async def _download_cover_for(meta: dict, cover_key: str) -> str | None:
     if not cover_local:
         raise HTTPException(status_code=502, detail=f"Cover download failed ({reason})")
     return cover_local
+
+
+def _merge_seiyuu(existing_json: str | None, incoming: list) -> list[str]:
+    """Union the entry's current cast with the fetched cast, existing order
+    first — applying a fetch never drops hand-entered names."""
+    import json as _json
+    try:
+        existing = _json.loads(existing_json or "[]")
+    except Exception:
+        existing = []
+    out = [s for s in existing if isinstance(s, str) and s.strip()]
+    for name in incoming or []:
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+async def _download_volume_gallery(
+    meta: dict, cover_key: str, parent_kind: str, parent_id: int,
+) -> int:
+    """Multi-volume fetches carry per-volume covers in extra['volumes'].
+    The first/primary cover lands on the entry itself; the rest download
+    into data/covers and register as media_assets gallery rows (deduped by
+    path so re-applying doesn't stack duplicates). Failed downloads are
+    skipped, not fatal."""
+    volumes = (meta.get("extra") or {}).get("volumes") or []
+    primary_url = meta.get("cover_url")
+    extra_covers = []
+    seen_urls = {primary_url}
+    for vol in volumes:
+        url = vol.get("cover_url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            extra_covers.append(url)
+    if not extra_covers:
+        return 0
+
+    added = 0
+    now = datetime.utcnow().isoformat() + "Z"
+    async with httpx.AsyncClient() as client:
+        downloaded: list[str] = []
+        for i, url in enumerate(extra_covers, start=1):
+            cover_local, reason = await download_cover(client, url, f"{cover_key}_vol{i}")
+            if cover_local:
+                downloaded.append(cover_local)
+            else:
+                logger.warning(f"[metadata] volume cover failed ({reason}): {url}")
+
+    if not downloaded:
+        return 0
+    conn = await db.get_db()
+    try:
+        cur = await conn.execute(
+            "SELECT path FROM media_assets WHERE parent_kind = ? AND parent_id = ?",
+            (parent_kind, parent_id),
+        )
+        existing_paths = {r["path"] for r in await cur.fetchall()}
+        for sort_idx, path in enumerate(downloaded, start=1):
+            if path in existing_paths:
+                continue
+            await conn.execute(
+                """INSERT INTO media_assets (parent_kind, parent_id, path, role,
+                                             sort_order, created_at)
+                   VALUES (?, ?, ?, 'gallery', ?, ?)""",
+                (parent_kind, parent_id, path, sort_idx, now),
+            )
+            added += 1
+        await conn.commit()
+    finally:
+        await conn.close()
+    return added
 
 
 @router.post("/apply", dependencies=[Depends(require_api_key)])
@@ -148,7 +280,8 @@ async def _apply_to_item(item_id: int, meta: dict, fields: set[str]) -> dict:
     if "release_date" in fields and meta.get("release_date"):
         data["release_date"] = meta["release_date"]
     if "seiyuu" in fields and meta.get("seiyuu"):
-        data["seiyuu"] = list(meta["seiyuu"])
+        # Union, not replace — hand-entered names survive a fetch.
+        data["seiyuu"] = _merge_seiyuu(item.get("seiyuu"), meta["seiyuu"])
     if "description" in fields and meta.get("description"):
         data["description"] = meta["description"]
     if "source_note" in fields:
@@ -158,12 +291,20 @@ async def _apply_to_item(item_id: int, meta: dict, fields: set[str]) -> dict:
     if data:
         await db.update_item_user_data(item_id, data)
 
+    gallery_added = 0
     if "cover" in fields and meta.get("cover_url"):
         cover_local = await _download_cover_for(meta, item["product_code"])
         await db.set_item_cover(item_id, cover_local, meta["cover_url"])
         applied.append("cover")
+        gallery_added = await _download_volume_gallery(
+            meta, item["product_code"], "item", item_id
+        )
 
-    return {"applied": applied, "item": await db.get_item(item_id)}
+    return {
+        "applied": applied,
+        "gallery_added": gallery_added,
+        "item": await db.get_item(item_id),
+    }
 
 
 async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> dict:
@@ -200,8 +341,9 @@ async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> di
             mirror["release_date"] = meta["release_date"]
             applied.append("release_date")
         if "seiyuu" in fields and meta.get("seiyuu"):
-            _set("seiyuu", _json.dumps(list(meta["seiyuu"]), ensure_ascii=False))
-            mirror["seiyuu"] = list(meta["seiyuu"])
+            merged_cast = _merge_seiyuu(tokuten["seiyuu"], meta["seiyuu"])
+            _set("seiyuu", _json.dumps(merged_cast, ensure_ascii=False))
+            mirror["seiyuu"] = merged_cast
             applied.append("seiyuu")
         if "description" in fields and meta.get("description"):
             _set("description", meta["description"])
@@ -228,6 +370,7 @@ async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> di
         await conn.close()
 
     cover_local = None
+    gallery_added = 0
     if "cover" in fields and meta.get("cover_url"):
         cover_key = paired["product_code"] if paired else f"tokuten_{tokuten_id}"
         cover_local = await _download_cover_for(meta, cover_key)
@@ -241,6 +384,9 @@ async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> di
         finally:
             await conn.close()
         applied.append("cover")
+        gallery_added = await _download_volume_gallery(
+            meta, cover_key, "tokuten", tokuten_id
+        )
 
     # Mirror onto the paired Library card so filters/cards stay in sync.
     # update_item_user_data also refreshes the seiyuu/tags index tables.
@@ -257,4 +403,4 @@ async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> di
         out["item_id"] = paired["id"] if paired else None
     finally:
         await conn.close()
-    return {"applied": applied, "tokuten": out}
+    return {"applied": applied, "gallery_added": gallery_added, "tokuten": out}

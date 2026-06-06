@@ -15,6 +15,8 @@ from fastapi.testclient import TestClient
 
 import database
 import metadata_sources
+from metadata_sources.base import empty_metadata
+from routers import api as api_router
 from routers import metadata as metadata_router
 
 NOW = "2026-01-01T00:00:00Z"
@@ -40,7 +42,19 @@ SAMPLE_META = {
 def make_app() -> FastAPI:
     app = FastAPI()
     app.include_router(metadata_router.router)
+    app.include_router(api_router.router)
     return app
+
+
+def _vol_meta(n: int, cv: str) -> dict:
+    meta = empty_metadata("rejet", f"https://rejet.jp/works/?s=x#rejet=REC-{850 + n}")
+    meta["title"] = f"シリーズCD Vol.{n} CV.{cv}"
+    meta["seiyuu"] = [cv]
+    meta["release_date"] = f"2019-0{n}-20"
+    meta["description"] = "shared blurb"
+    meta["catalog_number"] = f"REC-{850 + n}"
+    meta["cover_url"] = f"https://example.com/REC-{850 + n}.jpg"
+    return meta
 
 
 class FetchSearchTests(unittest.TestCase):
@@ -97,6 +111,55 @@ class FetchSearchTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 200)
         mock_search.assert_awaited_once()
 
+    def test_fetch_multi_merges_volumes(self):
+        rejet = metadata_sources.get_source("rejet")
+        vols = [_vol_meta(1, "A声優"), _vol_meta(2, "B声優")]
+        with patch.object(rejet, "fetch_by_url", AsyncMock(side_effect=vols)):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/metadata/fetch-multi",
+                    json={"urls": [v["source_url"] for v in vols]},
+                )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertEqual(body["fetched"], 2)
+        meta = body["metadata"]
+        self.assertEqual(meta["title"], "シリーズCD")
+        self.assertEqual(meta["seiyuu"], ["A声優", "B声優"])
+        self.assertEqual(meta["release_date"], "2019-01-20")
+        self.assertEqual(len(meta["extra"]["volumes"]), 2)
+
+    def test_fetch_multi_partial_failure_still_merges(self):
+        rejet = metadata_sources.get_source("rejet")
+        with patch.object(
+            rejet, "fetch_by_url",
+            AsyncMock(side_effect=[_vol_meta(1, "A声優"), RuntimeError("boom")]),
+        ):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/metadata/fetch-multi",
+                    json={"urls": ["https://rejet.jp/works/?s=x#rejet=REC-851",
+                                   "https://rejet.jp/works/?s=x#rejet=REC-852"]},
+                )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["fetched"], 1)
+        self.assertEqual(len(body["errors"]), 1)
+
+    def test_fetch_multi_rejects_oversize_and_unsupported(self):
+        with TestClient(self.app) as client:
+            resp = client.post(
+                "/api/metadata/fetch-multi",
+                json={"urls": ["https://rejet.jp/works/"] * 21},
+            )
+            self.assertEqual(resp.status_code, 400)
+            resp = client.post(
+                "/api/metadata/fetch-multi", json={"urls": ["https://example.com/x"]}
+            )
+            self.assertEqual(resp.status_code, 400)
+            resp = client.post("/api/metadata/fetch-multi", json={"urls": []})
+            self.assertEqual(resp.status_code, 400)
+
 
 class ApplyTests(unittest.TestCase):
     """Apply endpoints against a real temp DB built by the migration chain."""
@@ -124,6 +187,13 @@ class ApplyTests(unittest.TestCase):
                 (NOW, NOW),
             )
             await conn.execute(
+                """INSERT INTO items (product_code, title, kind, is_manual, notes,
+                                      seiyuu, created_at, updated_at)
+                   VALUES ('MAN-TEST02', 'multi', 'drama_cd', 1, '',
+                           '["既存の人"]', ?, ?)""",
+                (NOW, NOW),
+            )
+            await conn.execute(
                 """INSERT INTO tokutens (kind, title, shop, notes, created_at, updated_at)
                    VALUES ('audio', '[New Tokuten]', 'other', '', ?, ?)""",
                 (NOW, NOW),
@@ -142,6 +212,10 @@ class ApplyTests(unittest.TestCase):
                 "SELECT id FROM items WHERE product_code = 'MAN-TEST01'"
             )
             cls.item_id = (await cur.fetchone())[0]
+            cur = await conn.execute(
+                "SELECT id FROM items WHERE product_code = 'MAN-TEST02'"
+            )
+            cls.multi_item_id = (await cur.fetchone())[0]
 
     def setUp(self):
         self.app = make_app()
@@ -211,6 +285,99 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual(mirrored["release_date"], "2009-03-27")
         self.assertIn("石川英郎", mirrored["seiyuu"])
         self.assertEqual(mirrored["cover_local"], "data/covers/TKT-TEST01.jpg")
+
+    def test_apply_multi_volume_full_flow(self):
+        """Merged multi-volume apply: cast unions with existing names,
+        per-volume note lines, extra covers land in the media gallery
+        (deduped on re-apply), set-cover promotes, delete removes."""
+        from metadata_sources.merge import merge_metadata
+
+        merged = merge_metadata([_vol_meta(1, "A声優"), _vol_meta(2, "B声優")])
+        fields = ["title", "release_date", "seiyuu", "description", "cover", "source_note"]
+        covers = [
+            ("data/covers/MAN-TEST02.jpg", None),       # primary
+            ("data/covers/MAN-TEST02_vol1.jpg", None),  # vol 2's cover → gallery
+        ]
+        with patch.object(metadata_router, "download_cover", AsyncMock(side_effect=covers)):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/metadata/apply",
+                    json={"target": "item", "target_id": self.multi_item_id,
+                          "metadata": merged, "fields": fields},
+                )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        item = body["item"]
+        self.assertEqual(body["gallery_added"], 1)
+        self.assertEqual(item["title"], "シリーズCD")
+        # union: seeded hand-entered name survives, both volume CVs added
+        self.assertIn("既存の人", item["seiyuu"])
+        self.assertIn("A声優", item["seiyuu"])
+        self.assertIn("B声優", item["seiyuu"])
+        # per-volume note lines + count stamp
+        self.assertIn("REC-851", item["notes"])
+        self.assertIn("REC-852", item["notes"])
+        self.assertIn("(2 volumes", item["notes"])
+        self.assertEqual(item["cover_local"], "data/covers/MAN-TEST02.jpg")
+
+        with TestClient(self.app) as client:
+            # gallery listing with computed url
+            resp = client.get(f"/api/items/{self.multi_item_id}/media")
+            self.assertEqual(resp.status_code, 200)
+            media = resp.json()["media"]
+            self.assertEqual(len(media), 1)
+            self.assertEqual(media[0]["url"], "/covers/MAN-TEST02_vol1.jpg")
+            media_id = media[0]["id"]
+
+        # re-apply: gallery dedupes, cast union doesn't duplicate
+        with patch.object(metadata_router, "download_cover", AsyncMock(side_effect=covers)):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/metadata/apply",
+                    json={"target": "item", "target_id": self.multi_item_id,
+                          "metadata": merged, "fields": ["seiyuu", "cover"]},
+                )
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["gallery_added"], 0)
+        self.assertEqual(body["item"]["seiyuu"].count("A声優"), 1)
+
+        with TestClient(self.app) as client:
+            # promote the gallery image to primary cover
+            resp = client.post(
+                f"/api/items/{self.multi_item_id}/media/{media_id}/set-cover"
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.json()["cover_local"], "data/covers/MAN-TEST02_vol1.jpg")
+            # delete the gallery row
+            resp = client.delete(f"/api/items/{self.multi_item_id}/media/{media_id}")
+            self.assertEqual(resp.status_code, 200)
+            resp = client.get(f"/api/items/{self.multi_item_id}/media")
+            self.assertEqual(resp.json()["media"], [])
+
+    def test_media_ownership_guard(self):
+        """A media row belonging to another item can't be promoted/deleted
+        through a different item id."""
+        async def _seed_media():
+            async with aiosqlite.connect(database.DB_PATH) as conn:
+                cur = await conn.execute(
+                    """INSERT INTO media_assets (parent_kind, parent_id, path, role,
+                                                 sort_order, created_at)
+                       VALUES ('item', ?, 'data/covers/owned.jpg', 'gallery', 0, ?)""",
+                    (self.multi_item_id, NOW),
+                )
+                await conn.commit()
+                return cur.lastrowid
+
+        media_id = asyncio.run(_seed_media())
+        with TestClient(self.app) as client:
+            resp = client.post(f"/api/items/{self.item_id}/media/{media_id}/set-cover")
+            self.assertEqual(resp.status_code, 404)
+            resp = client.delete(f"/api/items/{self.item_id}/media/{media_id}")
+            self.assertEqual(resp.status_code, 404)
+            # cleanup via the rightful owner
+            resp = client.delete(f"/api/items/{self.multi_item_id}/media/{media_id}")
+            self.assertEqual(resp.status_code, 200)
 
     def test_apply_unknown_target(self):
         with TestClient(self.app) as client:

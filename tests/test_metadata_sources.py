@@ -7,9 +7,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import metadata_sources
-from metadata_sources.base import normalize_date
+from metadata_sources.base import empty_metadata, normalize_date
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.gamers import GamersSource
+from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -193,6 +194,72 @@ class RejetParseTests(unittest.TestCase):
         self.assertGreaterEqual(len(works), 5)
         for _, meta in works:
             self.assertTrue(meta["title"])
+
+
+def _vol(n: int, cv: str, date: str, desc: str = "shared blurb") -> dict:
+    meta = empty_metadata("rejet", f"https://rejet.jp/works/?s=x#rejet=REC-{850 + n}")
+    meta["title"] = f"カレと48時間を駆け抜けるCD 「クリミナーレ！T」Vol.{n} CV.{cv}"
+    meta["seiyuu"] = [cv]
+    meta["release_date"] = date
+    meta["description"] = desc
+    meta["price"] = "2,200円+税"
+    meta["catalog_number"] = f"REC-{850 + n}"
+    meta["series"] = "クリミナーレ！"
+    meta["maker"] = "Rejet"
+    meta["cover_url"] = f"https://rejet.jp/works/wp-content/uploads/REC-{850 + n}_500.jpg"
+    return meta
+
+
+class MergeMetadataTests(unittest.TestCase):
+    def test_merge_volumes(self):
+        merged = merge_metadata([
+            _vol(1, "鳥海浩輔", "2019-01-23"),
+            _vol(2, "前野智昭", "2019-02-20"),
+            _vol(3, "下野 紘", "2019-03-20"),
+        ])
+        # common prefix, stripped of the Vol.N tail
+        self.assertEqual(merged["title"], "カレと48時間を駆け抜けるCD 「クリミナーレ！T」")
+        # cast union in volume order
+        self.assertEqual(merged["seiyuu"], ["鳥海浩輔", "前野智昭", "下野 紘"])
+        # earliest release date
+        self.assertEqual(merged["release_date"], "2019-01-23")
+        # identical blurbs collapse to one
+        self.assertEqual(merged["description"], "shared blurb")
+        # identical price survives; differing catalog numbers don't
+        self.assertEqual(merged["price"], "2,200円+税")
+        self.assertIsNone(merged["catalog_number"])
+        # first volume's cover is primary
+        self.assertIn("REC-851", merged["cover_url"])
+        # per-volume detail preserved
+        vols = merged["extra"]["volumes"]
+        self.assertEqual(len(vols), 3)
+        self.assertEqual(vols[2]["catalog_number"], "REC-853")
+        self.assertEqual(merged["series"], "クリミナーレ！")
+
+    def test_merge_differing_descriptions_join_with_headers(self):
+        merged = merge_metadata([
+            _vol(1, "A", "2019-01-23", desc="story one"),
+            _vol(2, "B", "2019-02-20", desc="story two"),
+        ])
+        self.assertIn("■", merged["description"])
+        self.assertIn("story one", merged["description"])
+        self.assertIn("story two", merged["description"])
+
+    def test_merge_single_passthrough(self):
+        v = _vol(1, "A", "2019-01-23")
+        self.assertIs(merge_metadata([v]), v)
+
+    def test_merge_unrelated_titles_falls_back_to_first(self):
+        a = _vol(1, "A", "2019-01-23")
+        b = _vol(2, "B", "2019-02-20")
+        a["title"] = "全く別のタイトル"
+        b["title"] = "another thing entirely"
+        merged = merge_metadata([a, b])
+        self.assertEqual(merged["title"], "全く別のタイトル")
+
+    def test_merge_empty_raises(self):
+        with self.assertRaises(ValueError):
+            merge_metadata([])
 
 
 if __name__ == "__main__":

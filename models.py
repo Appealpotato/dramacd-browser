@@ -294,6 +294,12 @@ class MetadataFetchRequest(BaseModel):
     url: str
 
 
+class MetadataFetchMultiRequest(BaseModel):
+    """Fetch several product URLs (volumes of one series) and merge them
+    into a single normalized payload for one library entry."""
+    urls: list[str]
+
+
 class MetadataSearchRequest(BaseModel):
     query: str
     source: Optional[str] = None  # omit to search all searchable sources

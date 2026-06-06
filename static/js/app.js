@@ -585,6 +585,14 @@ const app = createApp({
         const metaPreviewFields = ref({});    // { fieldName: bool } checkbox states
         const metaApplyBusy = ref(false);
         const metaApplyError = transientRef('', 8000);
+        // Multi-volume: checked search-result URLs, merged via fetch-multi.
+        const metaSelectedUrls = ref([]);
+        // Mini cover gallery (media_assets) for the detail panel.
+        const galleryOpen = ref(false);
+        const galleryMedia = ref([]);
+        const galleryLoading = ref(false);
+        const galleryBusy = ref(false);
+        const galleryError = transientRef('', 6000);
 
         // Game cover upload state (parallel to coverUploadLoading for items).
         const gameCoverFileInput = ref(null);
@@ -653,6 +661,69 @@ const app = createApp({
         const unmatchedFilesLoading = ref(false);
         const unmatchedFilesList = ref([]);
         const activeTab = ref('library');
+
+        // === Scroll position retention across tab/subtab switches ===
+        // Tabs render via v-if, so a tab's DOM (and its scroll position) is
+        // destroyed on switch. Each tab owns one scroll container
+        // (.main-content for Library, .pipeline-panel for Atelier/Player/
+        // Settings); we snapshot its scrollTop before the swap (pre-flush
+        // watcher: old DOM still mounted) and restore after nextTick once
+        // the new tab's DOM exists. Keyed by tab — and by subtab within
+        // Library so Drama CDs / Tokutens / Games each remember their own
+        // spot.
+        const _tabScrollMemo = {};
+        function _scrollMemoKey(tab, subtab) {
+            const t = tab !== undefined ? tab : activeTab.value;
+            if (t !== 'library') return t;
+            const s = subtab !== undefined ? subtab : librarySubtab.value;
+            return 'library:' + s;
+        }
+        function _activeScrollEl() {
+            return document.querySelector('.main-content, .pipeline-panel');
+        }
+        function _snapshotScroll(key) {
+            const el = _activeScrollEl();
+            if (el) _tabScrollMemo[key] = el.scrollTop;
+        }
+        function _restoreScroll(key) {
+            const target = _tabScrollMemo[key] || 0;
+            const attempt = () => {
+                const el = _activeScrollEl();
+                if (el) el.scrollTop = target;
+                return el ? el.scrollTop : 0;
+            };
+            nextTick(() => {
+                attempt();
+                if (target <= 0) return;
+                // Content often loads async after a switch (items refetch),
+                // so the first attempt can clamp to 0 against a short
+                // container. Re-apply a few times; bail once it sticks or
+                // the user has started scrolling themselves.
+                let tries = 0;
+                const timer = setInterval(() => {
+                    tries += 1;
+                    const el = _activeScrollEl();
+                    if (!el) { clearInterval(timer); return; }
+                    if (Math.abs(el.scrollTop - target) <= 2 || tries >= 6) {
+                        clearInterval(timer);
+                        return;
+                    }
+                    // User grabbed the scrollbar mid-restore — leave it be.
+                    if (el.scrollTop > 0 && tries > 1) { clearInterval(timer); return; }
+                    el.scrollTop = target;
+                }, 150);
+            });
+        }
+        watch(activeTab, (newTab, oldTab) => {
+            if (oldTab) _snapshotScroll(_scrollMemoKey(oldTab));
+            _restoreScroll(_scrollMemoKey(newTab));
+        });
+        watch(librarySubtab, (newSub, oldSub) => {
+            if (activeTab.value !== 'library') return;
+            if (oldSub) _snapshotScroll(_scrollMemoKey('library', oldSub));
+            _restoreScroll(_scrollMemoKey('library', newSub));
+        });
+
         // Tokutens (game-bonus / community CDs) live in the same items table
         // as drama CDs. Filtered out by default via filters.kind='drama_cd';
         // user explicitly switches the Type filter to see them.
@@ -2653,6 +2724,47 @@ const app = createApp({
         function metaSourceLabel(name) {
             return META_SOURCE_LABELS[name] || name || '?';
         }
+        // === Multi-volume selection ===
+        // Checkboxes on search results; "Fetch N selected" merges the picked
+        // volumes server-side (cast union, common-prefix title, per-volume
+        // note lines) into one preview for the single library entry.
+        function metaToggleSelected(hit) {
+            if (!hit || !hit.url) return;
+            const idx = metaSelectedUrls.value.indexOf(hit.url);
+            if (idx >= 0) metaSelectedUrls.value.splice(idx, 1);
+            else if (metaSelectedUrls.value.length < 20) metaSelectedUrls.value.push(hit.url);
+            else metaFetchError.value = 'Max 20 volumes per fetch';
+        }
+        async function metaFetchSelected() {
+            const urls = metaSelectedUrls.value.slice();
+            if (!urls.length || metaFetchBusy.value) return;
+            metaFetchBusy.value = true;
+            metaFetchError.value = '';
+            try {
+                const resp = await fetch('/api/metadata/fetch-multi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls }),
+                });
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    metaFetchError.value = err.detail || 'Fetch failed';
+                    return;
+                }
+                const data = await resp.json();
+                if ((data.errors || []).length) {
+                    metaFetchError.value = `${data.errors.length} volume(s) failed; merged the rest`;
+                }
+                _openMetaPreview(data.metadata);
+                metaSelectedUrls.value = [];
+                metaSearchResults.value = [];
+                metaSearchQuery.value = '';
+            } catch (err) {
+                metaFetchError.value = 'Fetch failed: ' + (err.message || err);
+            } finally {
+                metaFetchBusy.value = false;
+            }
+        }
         function _metaTargetKind() {
             const s = selectedItem.value;
             return (s && s.kind === 'tokuten_audio' && s.tokuten_id) ? 'tokuten' : 'item';
@@ -2688,12 +2800,99 @@ const app = createApp({
             metaFetchUrl.value = '';
             metaSearchQuery.value = '';
             metaSearchResults.value = [];
+            metaSelectedUrls.value = [];
             metaPreview.value = null;
             metaPreviewFields.value = {};
+            galleryOpen.value = false;
+            galleryMedia.value = [];
+        }
+
+        // === Cover mini-gallery (media_assets) ===
+        // Extra volume covers from multi-volume fetches (and tokuten scanner
+        // gallery files) live in media_assets; this popover lists them with
+        // set-as-cover / remove actions.
+        async function openItemGallery() {
+            if (!selectedItem.value) return;
+            galleryOpen.value = true;
+            galleryLoading.value = true;
+            try {
+                const resp = await fetch(`/api/items/${selectedItem.value.id}/media`);
+                galleryMedia.value = resp.ok ? (await resp.json()).media || [] : [];
+            } catch (err) {
+                galleryMedia.value = [];
+            } finally {
+                galleryLoading.value = false;
+            }
+        }
+        function closeItemGallery() {
+            galleryOpen.value = false;
+        }
+        async function setGalleryCover(media) {
+            if (!selectedItem.value || !media || galleryBusy.value) return;
+            galleryBusy.value = true;
+            galleryError.value = '';
+            try {
+                const resp = await fetch(
+                    `/api/items/${selectedItem.value.id}/media/${media.id}/set-cover`,
+                    { method: 'POST' },
+                );
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    galleryError.value = err.detail || 'Set cover failed';
+                    return;
+                }
+                const updated = await resp.json();
+                selectedItem.value = { ...selectedItem.value, ...updated };
+                const idx = items.value.findIndex(i => i.id === updated.id);
+                if (idx >= 0) items.value[idx] = { ...items.value[idx], ...updated };
+                pushToast({ kind: 'success', title: 'Cover updated', ttl: 2500 });
+            } catch (err) {
+                galleryError.value = 'Set cover failed: ' + (err.message || err);
+            } finally {
+                galleryBusy.value = false;
+            }
+        }
+        async function removeGalleryMedia(media) {
+            if (!selectedItem.value || !media || galleryBusy.value) return;
+            galleryBusy.value = true;
+            galleryError.value = '';
+            try {
+                const resp = await fetch(
+                    `/api/items/${selectedItem.value.id}/media/${media.id}`,
+                    { method: 'DELETE' },
+                );
+                if (!resp.ok) {
+                    const err = await resp.json().catch(() => ({}));
+                    galleryError.value = err.detail || 'Remove failed';
+                    return;
+                }
+                galleryMedia.value = galleryMedia.value.filter(m => m.id !== media.id);
+            } catch (err) {
+                galleryError.value = 'Remove failed: ' + (err.message || err);
+            } finally {
+                galleryBusy.value = false;
+            }
         }
         // Client-side mirror of the backend's provenance stamp, for preview.
         function metaNotePreview(meta) {
             if (!meta) return '';
+            const today = new Date().toISOString().slice(0, 10);
+            const volumes = (meta.extra || {}).volumes || [];
+            if (volumes.length) {
+                // Multi-volume: one line per volume, mirroring the backend.
+                const lines = volumes.map(v => {
+                    const parts = ['[' + (v.source || '?') + ']'];
+                    if (v.title) parts.push(v.title);
+                    if (v.price) parts.push(v.price);
+                    if (v.catalog_number) parts.push('品番 ' + v.catalog_number);
+                    if (v.jan) parts.push('JAN ' + v.jan);
+                    if (v.release_date) parts.push(v.release_date);
+                    if (v.source_url) parts.push(v.source_url);
+                    return parts.join(' ・ ');
+                });
+                lines.push(`(${volumes.length} volumes ・ fetched ${today})`);
+                return lines.join('\n');
+            }
             const parts = ['[' + (meta.source || '?') + ']'];
             if (meta.price) parts.push(meta.price);
             if (meta.catalog_number) parts.push('品番 ' + meta.catalog_number);
@@ -2701,7 +2900,7 @@ const app = createApp({
             if (meta.maker) parts.push(meta.maker);
             if (meta.series) parts.push('シリーズ: ' + meta.series);
             if (meta.source_url) parts.push(meta.source_url);
-            parts.push('fetched ' + new Date().toISOString().slice(0, 10));
+            parts.push('fetched ' + today);
             return parts.join(' ・ ');
         }
         async function metaApply() {
@@ -9148,6 +9347,9 @@ const app = createApp({
             metaPreview, metaPreviewFields, metaApplyBusy, metaApplyError,
             metaSearchInput, metaFetchFromUrl, metaPickSearchResult,
             metaClosePreview, metaNotePreview, metaApply, metaSourceLabel,
+            metaSelectedUrls, metaToggleSelected, metaFetchSelected,
+            galleryOpen, galleryMedia, galleryLoading, galleryBusy, galleryError,
+            openItemGallery, closeItemGallery, setGalleryCover, removeGalleryMedia,
             gameCoverFileInput, gameCoverUploadLoading, gameCoverUploadError, gameCoverUploadSuccess,
             chooseGameCover, onGameCoverFileChange,
             vndbMatchBusy, vndbMatchMessage, vndbMatchError, matchVndbAll,

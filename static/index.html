@@ -2873,6 +2873,17 @@
                             <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
                         </svg>
                     </button>
+                    <!-- Mini cover gallery (media_assets) — volume covers from
+                         multi-volume fetches + tokuten scanner gallery files. -->
+                    <button class="cover-replace-btn cover-gallery-btn" type="button"
+                            @click="openItemGallery()" title="View cover gallery">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14">
+                            <rect width="14" height="14" x="3" y="7" rx="2"/>
+                            <path d="M7 3h12a2 2 0 0 1 2 2v12"/>
+                            <circle cx="8" cy="12" r="1.5"/>
+                            <path d="m17 21-4.586-4.586a2 2 0 0 0-2.828 0L5 21"/>
+                        </svg>
+                    </button>
                 </div>
 
                 <div class="detail-body">
@@ -3011,10 +3022,16 @@
                                 <span v-if="metaSearching" class="vndb-search-spinner">…</span>
                             </div>
                             <div v-if="metaSearchResults.length" class="vndb-search-results meta-search-results">
-                                <button v-for="(r, ri) in metaSearchResults" :key="'meta-' + ri"
-                                        type="button"
-                                        class="vndb-result-row"
-                                        @click="metaPickSearchResult(r)">
+                                <!-- Row click = single fetch; checkbox = add to a
+                                     multi-volume selection merged by fetch-multi. -->
+                                <div v-for="(r, ri) in metaSearchResults" :key="'meta-' + ri"
+                                     class="vndb-result-row meta-result-row"
+                                     role="button"
+                                     @click="metaPickSearchResult(r)">
+                                    <input type="checkbox" class="meta-result-check"
+                                           :checked="metaSelectedUrls.includes(r.url)"
+                                           @click.stop="metaToggleSelected(r)"
+                                           title="Select for multi-volume fetch">
                                     <img v-if="r.thumbnail" :src="r.thumbnail" class="vndb-result-thumb" loading="lazy" referrerpolicy="no-referrer">
                                     <div v-else class="vndb-result-thumb vndb-result-thumb-empty"></div>
                                     <div class="vndb-result-meta">
@@ -3026,7 +3043,15 @@
                                             <span v-if="r.price">· {{ r.price }}</span>
                                         </div>
                                     </div>
+                                </div>
+                            </div>
+                            <div v-if="metaSelectedUrls.length" class="meta-fetch-row meta-multi-bar">
+                                <button type="button" class="btn btn-primary btn-sm"
+                                        @click="metaFetchSelected()" :disabled="metaFetchBusy">
+                                    {{ metaFetchBusy ? 'Fetching…' : 'Fetch ' + metaSelectedUrls.length + ' selected as one entry' }}
                                 </button>
+                                <button type="button" class="btn btn-secondary btn-sm"
+                                        @click="metaSelectedUrls = []" :disabled="metaFetchBusy">Clear</button>
                             </div>
                             <div v-if="metaFetchError" class="detail-edit-error">{{ metaFetchError }}</div>
                         </div>
@@ -3318,14 +3343,60 @@
             </div>
         </div>
 
+        <!-- Cover mini-gallery — media_assets for the selected item (its own
+             rows + the linked tokuten's). Set-as-cover promotes a gallery
+             image to the primary cover; Remove drops the row (file stays). -->
+        <div class="overlay meta-preview-overlay" v-if="galleryOpen" @click.self="closeItemGallery">
+            <div class="meta-preview-panel gallery-panel">
+                <div class="meta-preview-head">
+                    <h3>Cover gallery</h3>
+                    <button class="btn btn-secondary btn-sm" @click="closeItemGallery">✕</button>
+                </div>
+                <div v-if="galleryLoading" class="gallery-empty">Loading…</div>
+                <div v-else-if="!galleryMedia.length" class="gallery-empty">
+                    No gallery images yet. Multi-volume fetches park the other volumes' covers here.
+                </div>
+                <div v-else class="gallery-grid">
+                    <div v-for="m in galleryMedia" :key="'gal-' + m.id" class="gallery-cell">
+                        <img :src="m.url" loading="lazy">
+                        <div class="gallery-cell-actions">
+                            <button class="btn btn-secondary btn-sm" @click="setGalleryCover(m)"
+                                    :disabled="galleryBusy" title="Use as primary cover">Set cover</button>
+                            <button class="btn btn-secondary btn-sm gallery-remove" @click="removeGalleryMedia(m)"
+                                    :disabled="galleryBusy" title="Remove from gallery">✕</button>
+                        </div>
+                    </div>
+                </div>
+                <div v-if="galleryError" class="detail-edit-error">{{ galleryError }}</div>
+            </div>
+        </div>
+
         <!-- Metadata fetch preview — sits above the item detail overlay.
              Shows the normalized fetch result with per-field checkboxes;
              only checked fields are written by POST /api/metadata/apply. -->
         <div class="overlay meta-preview-overlay" v-if="metaPreview" @click.self="metaClosePreview">
             <div class="meta-preview-panel">
                 <div class="meta-preview-head">
-                    <h3>Fetched from {{ metaSourceLabel(metaPreview.source) }}</h3>
+                    <h3>
+                        Fetched from {{ metaSourceLabel(metaPreview.source) }}
+                        <span v-if="(metaPreview.extra || {}).volumes" class="meta-source-badge">
+                            {{ metaPreview.extra.volumes.length }} volumes merged
+                        </span>
+                    </h3>
                     <button class="btn btn-secondary btn-sm" @click="metaClosePreview">✕</button>
+                </div>
+                <!-- Multi-volume merge: which volumes went into this payload.
+                     Their covers download into the mini gallery on apply. -->
+                <div v-if="(metaPreview.extra || {}).volumes" class="meta-preview-volumes">
+                    <div v-for="(v, vi) in metaPreview.extra.volumes" :key="'vol-' + vi"
+                         class="meta-preview-volume">
+                        <span class="meta-preview-volume-title">{{ v.title }}</span>
+                        <span class="meta-preview-volume-sub">
+                            <span v-if="v.catalog_number">{{ v.catalog_number }}</span>
+                            <span v-if="v.release_date">· {{ v.release_date }}</span>
+                            <span v-if="v.price">· {{ v.price }}</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="meta-preview-body">
                     <div class="meta-preview-cover" v-if="metaPreview.cover_url">
@@ -3355,7 +3426,7 @@
                         <label class="meta-preview-field" v-if="metaPreview.cover_url">
                             <input type="checkbox" v-model="metaPreviewFields.cover">
                             <span class="meta-preview-label">Cover</span>
-                            <span class="meta-preview-value">download to library</span>
+                            <span class="meta-preview-value">{{ (metaPreview.extra || {}).volumes ? 'primary + ' + (metaPreview.extra.volumes.length - 1) + ' volume covers → gallery' : 'download to library' }}</span>
                         </label>
                         <label class="meta-preview-field"
                                v-if="selectedItem && selectedItem.kind === 'tokuten_audio'">
