@@ -50,6 +50,10 @@ def empty_metadata(source: str, source_url: str) -> dict:
     }
 
 
+# CV credits inside free text: "CV：名前" / "（CV. 名前）" / "CV.日野 聡"
+CV_RE = re.compile(r"[（(]?\s*(?:CV|ＣＶ|ｃｖ|cv)\s*[.．:：]\s*([^（）()\n<>【】､、/／]+)")
+
+
 def normalize_date(text: str | None) -> str | None:
     """Pull the first YYYY/MM/DD-ish date out of text -> YYYY-MM-DD."""
     if not text:

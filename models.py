@@ -249,7 +249,7 @@ TOKUTEN_KINDS = {"audio", "book", "image", "misc"}
 # this newer enum; migration 026 adds the metadata-fetch sources
 # (gamers/chil_chil/vgmdb).
 TOKUTEN_SHOPS = {"dlsite", "booth", "melon", "animate", "stellaworth",
-                 "gamers", "chil_chil", "vgmdb", "physical", "other"}
+                 "gamers", "chil_chil", "vgmdb", "rejet", "physical", "other"}
 
 
 class TokutenCreate(BaseModel):

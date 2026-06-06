@@ -10,12 +10,10 @@ from urllib.parse import quote, urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from .base import CV_RE as _CV_RE
 from .base import MetadataSource, SourceError, empty_metadata, normalize_date
 
 BASE = "https://www.gamers.co.jp"
-
-# CV credits inside free-text descriptions: "CV：名前" / "（CV. 名前）"
-_CV_RE = re.compile(r"[（(]?\s*(?:CV|ＣＶ|ｃｖ|cv)\s*[.．:：]\s*([^（）()\n<>【】､、/／]+)")
 
 
 class GamersSource(MetadataSource):

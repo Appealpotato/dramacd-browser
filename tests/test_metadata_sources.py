@@ -10,6 +10,7 @@ import metadata_sources
 from metadata_sources.base import normalize_date
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.gamers import GamersSource
+from metadata_sources.rejet import RejetSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -34,13 +35,17 @@ class RegistryTests(unittest.TestCase):
             metadata_sources.match_url("https://www.chil-chil.net/goodsDetail/goods_id/23936/"),
             ChilChilSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://rejet.jp/works/?cat=41"),
+            RejetSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
     def test_list_sources_shape(self):
         sources = metadata_sources.list_sources()
         names = {s["name"] for s in sources}
-        self.assertEqual(names, {"gamers", "chil_chil"})
+        self.assertEqual(names, {"gamers", "chil_chil", "rejet"})
         for s in sources:
             self.assertTrue(s["supports_search"])
             self.assertTrue(s["url_example"])
@@ -143,6 +148,51 @@ class ChilChilParseTests(unittest.TestCase):
         self.assertTrue(cd_hits, f"expected a CD-category hit, got {[h['category'] for h in hits]}")
         for h in hits:
             self.assertTrue(h["url"].startswith("https://www.chil-chil.net/goodsDetail/"))
+
+
+class RejetParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = RejetSource()
+
+    def test_parse_listing_page(self):
+        works = self.source.parse_page(
+            fixture("rejet_list.html"), "https://rejet.jp/works/?cat=41"
+        )
+        self.assertGreaterEqual(len(works), 5)
+        key, meta = works[0]
+        self.assertEqual(key, "REC-861")
+        self.assertEqual(meta["catalog_number"], "REC-861")
+        self.assertIn("クリミナーレ", meta["title"])
+        self.assertEqual(meta["release_date"], "2019-07-24")
+        self.assertEqual(meta["price"], "2,200円+税")
+        self.assertEqual(meta["series"], "クリミナーレ！")
+        self.assertEqual(meta["maker"], "Rejet")
+        # CV credit extracted from the title
+        self.assertEqual(meta["seiyuu"], ["日野 聡"])
+        # https-normalized cover with catalog filename
+        self.assertTrue(meta["cover_url"].startswith("https://rejet.jp/"))
+        self.assertIn("REC-861", meta["cover_url"])
+        # addressable fragment URL
+        self.assertEqual(meta["source_url"], "https://rejet.jp/works/?cat=41#rejet=REC-861")
+        self.assertIn("48時間", meta["description"])
+        self.assertEqual(meta["extra"]["type"], "CD")
+        self.assertEqual(meta["extra"]["official_site"], "http://rejetweb.jp/criminalet/")
+
+    def test_keys_unique_per_page(self):
+        works = self.source.parse_page(
+            fixture("rejet_list.html"), "https://rejet.jp/works/?cat=41"
+        )
+        keys = [k for k, _ in works]
+        self.assertEqual(len(keys), len(set(keys)))
+
+    def test_search_page_same_markup(self):
+        works = self.source.parse_page(
+            fixture("rejet_search.html"),
+            "https://rejet.jp/works/?s=%E3%82%AF%E3%83%AA%E3%83%9F%E3%83%8A%E3%83%BC%E3%83%AC",
+        )
+        self.assertGreaterEqual(len(works), 5)
+        for _, meta in works:
+            self.assertTrue(meta["title"])
 
 
 if __name__ == "__main__":

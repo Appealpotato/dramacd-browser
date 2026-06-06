@@ -189,6 +189,7 @@
                                 <option value="gamers">Gamers</option>
                                 <option value="chil_chil">Chil-Chil</option>
                                 <option value="vgmdb">VGMdb</option>
+                                <option value="rejet">Rejet</option>
                                 <option value="physical">Physical</option>
                                 <option value="other">Other</option>
                             </select>
@@ -2995,7 +2996,7 @@
                              class="meta-fetch-block">
                             <div class="meta-fetch-row">
                                 <input type="text" v-model="metaFetchUrl"
-                                       placeholder="Paste a Gamers / Chil-Chil product URL…"
+                                       placeholder="Paste a Gamers / Chil-Chil / Rejet URL…"
                                        @keyup.enter="metaFetchFromUrl()">
                                 <button type="button" class="btn btn-secondary btn-sm"
                                         @click="metaFetchFromUrl()" :disabled="metaFetchBusy || !metaFetchUrl.trim()">
@@ -3006,7 +3007,7 @@
                                 <input type="text"
                                        :value="metaSearchQuery"
                                        @input="metaSearchInput($event.target.value)"
-                                       placeholder="…or search Gamers + Chil-Chil by title">
+                                       placeholder="…or search Gamers + Chil-Chil + Rejet by title">
                                 <span v-if="metaSearching" class="vndb-search-spinner">…</span>
                             </div>
                             <div v-if="metaSearchResults.length" class="vndb-search-results meta-search-results">
@@ -3019,7 +3020,7 @@
                                     <div class="vndb-result-meta">
                                         <div class="vndb-result-title">{{ r.title }}</div>
                                         <div class="vndb-result-sub">
-                                            <span class="meta-source-badge">{{ r.source === 'chil_chil' ? 'Chil-Chil' : 'Gamers' }}</span>
+                                            <span class="meta-source-badge">{{ metaSourceLabel(r.source) }}</span>
                                             <span v-if="r.category">· {{ r.category }}</span>
                                             <span v-if="r.release_date">· {{ r.release_date }}</span>
                                             <span v-if="r.price">· {{ r.price }}</span>
@@ -3323,7 +3324,7 @@
         <div class="overlay meta-preview-overlay" v-if="metaPreview" @click.self="metaClosePreview">
             <div class="meta-preview-panel">
                 <div class="meta-preview-head">
-                    <h3>Fetched from {{ metaPreview.source === 'chil_chil' ? 'Chil-Chil' : 'Gamers' }}</h3>
+                    <h3>Fetched from {{ metaSourceLabel(metaPreview.source) }}</h3>
                     <button class="btn btn-secondary btn-sm" @click="metaClosePreview">✕</button>
                 </div>
                 <div class="meta-preview-body">

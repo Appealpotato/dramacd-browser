@@ -403,6 +403,7 @@ MIGRATION_IDS = [
     "024_backfill_tokuten_titles_from_items",
     "025_add_items_listen_status",
     "026_tokutens_metadata_sources",
+    "027_add_rejet_shop",
 ]
 
 # Migrations whose first run should trigger an on-disk backup of library.db.
@@ -1429,6 +1430,65 @@ async def _migration_026_tokutens_metadata_sources(db: aiosqlite.Connection):
         await db.execute("PRAGMA foreign_keys = ON")
 
 
+async def _migration_027_add_rejet_shop(db: aiosqlite.Connection):
+    """Adds 'rejet' to the tokutens shop/source enum (metadata source for
+    Rejet's own works listing). Same rebuild dance as 026 — SQLite CHECK
+    constraints can't be altered in place."""
+    if not await _table_exists(db, "tokutens"):
+        return
+    await db.commit()
+    await db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        await db.executescript(
+            """
+            CREATE TABLE tokutens_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'audio'
+                    CHECK(kind IN ('audio','book','image','misc')),
+                title TEXT NOT NULL,
+                title_en TEXT,
+                shop TEXT NOT NULL DEFAULT 'other'
+                    CHECK(shop IN ('dlsite','booth','melon','animate',
+                                   'stellaworth','gamers','chil_chil','vgmdb',
+                                   'rejet','physical','other')),
+                shop_other_name TEXT,
+                release_date TEXT,
+                notes TEXT DEFAULT '',
+                cover_local TEXT,
+                source_url TEXT,
+                local_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                vndb_id TEXT,
+                seiyuu TEXT DEFAULT '[]',
+                seiyuu_en TEXT DEFAULT '[]',
+                description TEXT,
+                description_en TEXT
+            );
+            INSERT INTO tokutens_new (
+                id, kind, title, title_en, shop, shop_other_name,
+                release_date, notes, cover_local, source_url, local_path,
+                created_at, updated_at, vndb_id, seiyuu, seiyuu_en,
+                description, description_en
+            )
+            SELECT
+                id, kind, title, title_en, shop, shop_other_name,
+                release_date, notes, cover_local, source_url, local_path,
+                created_at, updated_at, vndb_id, seiyuu, seiyuu_en,
+                description, description_en
+            FROM tokutens;
+            DROP TABLE tokutens;
+            ALTER TABLE tokutens_new RENAME TO tokutens;
+            CREATE INDEX IF NOT EXISTS idx_tokutens_kind ON tokutens(kind);
+            CREATE INDEX IF NOT EXISTS idx_tokutens_shop ON tokutens(shop);
+            CREATE INDEX IF NOT EXISTS idx_tokutens_vndb_id ON tokutens(vndb_id);
+            """
+        )
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON")
+
+
 MIGRATION_HANDLERS = {
     "001_add_items_confidence": _migration_001_add_items_confidence,
     "002_add_items_original_confidence": _migration_002_add_items_original_confidence,
@@ -1456,6 +1516,7 @@ MIGRATION_HANDLERS = {
     "024_backfill_tokuten_titles_from_items": _migration_024_backfill_tokuten_titles_from_items,
     "025_add_items_listen_status": _migration_025_add_items_listen_status,
     "026_tokutens_metadata_sources": _migration_026_tokutens_metadata_sources,
+    "027_add_rejet_shop": _migration_027_add_rejet_shop,
 }
 
 

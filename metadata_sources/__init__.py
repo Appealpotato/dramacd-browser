@@ -9,11 +9,13 @@ DLsite page (store tokutens, physical-only releases, etc.)."""
 from .base import MetadataSource, SourceError
 from .chilchil import ChilChilSource
 from .gamers import GamersSource
+from .rejet import RejetSource
 
 # Order matters only for documentation; URL dispatch is exact per-source.
 SOURCES: list[MetadataSource] = [
     GamersSource(),
     ChilChilSource(),
+    RejetSource(),
 ]
 
 _BY_NAME = {s.name: s for s in SOURCES}

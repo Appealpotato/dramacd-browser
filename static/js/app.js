@@ -2647,6 +2647,12 @@ const app = createApp({
             if (!hit || !hit.url) return;
             metaFetchFromUrl(hit.url);
         }
+        const META_SOURCE_LABELS = {
+            gamers: 'Gamers', chil_chil: 'Chil-Chil', rejet: 'Rejet', vgmdb: 'VGMdb',
+        };
+        function metaSourceLabel(name) {
+            return META_SOURCE_LABELS[name] || name || '?';
+        }
         function _metaTargetKind() {
             const s = selectedItem.value;
             return (s && s.kind === 'tokuten_audio' && s.tokuten_id) ? 'tokuten' : 'item';
@@ -9141,7 +9147,7 @@ const app = createApp({
             metaSearchQuery, metaSearchResults, metaSearching,
             metaPreview, metaPreviewFields, metaApplyBusy, metaApplyError,
             metaSearchInput, metaFetchFromUrl, metaPickSearchResult,
-            metaClosePreview, metaNotePreview, metaApply,
+            metaClosePreview, metaNotePreview, metaApply, metaSourceLabel,
             gameCoverFileInput, gameCoverUploadLoading, gameCoverUploadError, gameCoverUploadSuccess,
             chooseGameCover, onGameCoverFileChange,
             vndbMatchBusy, vndbMatchMessage, vndbMatchError, matchVndbAll,

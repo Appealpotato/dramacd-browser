@@ -52,7 +52,7 @@ class FetchSearchTests(unittest.TestCase):
             resp = client.get("/api/metadata/sources")
         self.assertEqual(resp.status_code, 200)
         names = {s["name"] for s in resp.json()["sources"]}
-        self.assertEqual(names, {"gamers", "chil_chil"})
+        self.assertEqual(names, {"gamers", "chil_chil", "rejet"})
 
     def test_fetch_url_dispatch_and_preview(self):
         source = metadata_sources.get_source("chil_chil")
@@ -73,10 +73,12 @@ class FetchSearchTests(unittest.TestCase):
     def test_search_all_sources_with_partial_failure(self):
         gamers = metadata_sources.get_source("gamers")
         chilchil = metadata_sources.get_source("chil_chil")
+        rejet = metadata_sources.get_source("rejet")
         hit = {"source": "chil_chil", "title": "t", "url": "u", "thumbnail": None,
                "release_date": None, "price": None, "category": "CD"}
         with patch.object(gamers, "search", AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch.object(chilchil, "search", AsyncMock(return_value=[hit])):
+             patch.object(chilchil, "search", AsyncMock(return_value=[hit])), \
+             patch.object(rejet, "search", AsyncMock(return_value=[])):
             with TestClient(self.app) as client:
                 resp = client.post("/api/metadata/search", json={"query": "xyz"})
         self.assertEqual(resp.status_code, 200)
