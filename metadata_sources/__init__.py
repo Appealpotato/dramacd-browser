@@ -15,6 +15,7 @@ from .dlsite import DLsiteSource
 from .fanza import FanzaSource
 from .gamers import GamersSource
 from .gyutto import GyuttoSource
+from .hvdb import HvdbSource
 from .melon import MelonbooksSource
 from .rejet import RejetSource
 from .stellaworth import StellaworthSource
@@ -35,6 +36,7 @@ SOURCES: list[MetadataSource] = [
     StellaworthSource(),
     ChilChilSource(),
     RejetSource(),
+    HvdbSource(),
 ]
 
 _BY_NAME = {s.name: s for s in SOURCES}

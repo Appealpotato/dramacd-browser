@@ -16,6 +16,7 @@ from metadata_sources.dlsite import DLsiteSource
 from metadata_sources.fanza import FanzaSource
 from metadata_sources.gamers import GamersSource
 from metadata_sources.gyutto import GyuttoSource
+from metadata_sources.hvdb import HvdbSource
 from metadata_sources.melon import MelonbooksSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
@@ -94,6 +95,10 @@ class RegistryTests(unittest.TestCase):
             metadata_sources.match_url("https://gyutto.com/i/item282706"),
             GyuttoSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://hvdb.me/Dashboard/Details/01644019"),
+            HvdbSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
@@ -103,7 +108,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
-            "digiket", "gyutto",
+            "digiket", "gyutto", "hvdb",
         })
         for s in sources:
             self.assertIsInstance(s["supports_search"], bool)
@@ -388,6 +393,46 @@ class GyuttoParseTests(unittest.TestCase):
         self.assertTrue(first["thumbnail"].startswith("https://gyutto.com/data/item_img/"))
         self.assertEqual(first["price"], "2,090円")
         self.assertEqual(first["category"], "あうとどあ仙人")
+
+
+class HvdbParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = HvdbSource()
+
+    def test_parse_product_with_cvs(self):
+        meta = self.source.parse_product(
+            fixture("hvdb_product.html"), "https://hvdb.me/Dashboard/Details/01637794"
+        )
+        self.assertEqual(meta["source"], "hvdb")
+        self.assertIn("黒髪クール姉", meta["title"])
+        self.assertIsNone(meta["title_en"])  # not translated yet
+        self.assertEqual(meta["extra"]["product_code"], "RJ01637794")
+        self.assertEqual(meta["maker"], "M屋")
+        self.assertEqual(meta["extra"]["circle_en"], "mya")
+        self.assertEqual(meta["seiyuu"], ["田中"])
+        self.assertEqual(meta["cover_url"], "https://hvdb.me/WorkImages/RJ01637794.jpg")
+        self.assertIn("ear licking", meta["extra"]["tags"])
+        self.assertFalse(meta["extra"]["sfw"])
+
+    def test_parse_product_with_english_title(self):
+        meta = self.source.parse_product(
+            fixture("hvdb_product_en.html"), "https://hvdb.me/Dashboard/Details/206084"
+        )
+        self.assertEqual(meta["title"], "#011 あおい/19才(学生)")
+        self.assertEqual(meta["title_en"], "#011 Aoi (19y/Student)")
+        self.assertEqual(meta["extra"]["product_code"], "RJ206084")
+        self.assertEqual(meta["maker"], "妖声堂")
+        self.assertEqual(meta["seiyuu"], [])  # N/A filtered out
+
+    def test_search_requires_rj_code(self):
+        # search() short-circuits to [] for non-code queries without any
+        # network access, so calling the coroutine directly is safe here.
+        import asyncio
+
+        async def run():
+            return await self.source.search(None, "耳かき ASMR")
+
+        self.assertEqual(asyncio.run(run()), [])
 
 
 class ChilChilParseTests(unittest.TestCase):

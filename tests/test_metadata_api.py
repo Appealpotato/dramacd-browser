@@ -70,7 +70,7 @@ class FetchSearchTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
-            "digiket", "gyutto",
+            "digiket", "gyutto", "hvdb",
         })
 
     def test_fetch_url_dispatch_and_preview(self):
