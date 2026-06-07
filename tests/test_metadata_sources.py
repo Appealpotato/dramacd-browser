@@ -11,9 +11,11 @@ from metadata_sources.animate import AnimateSource
 from metadata_sources.base import empty_metadata, normalize_date
 from metadata_sources.booth import BoothSource
 from metadata_sources.chilchil import ChilChilSource
+from metadata_sources.digiket import DigiketSource
 from metadata_sources.dlsite import DLsiteSource
 from metadata_sources.fanza import FanzaSource
 from metadata_sources.gamers import GamersSource
+from metadata_sources.gyutto import GyuttoSource
 from metadata_sources.melon import MelonbooksSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
@@ -82,6 +84,16 @@ class RegistryTests(unittest.TestCase):
             ),
             MelonbooksSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://www.digiket.com/work/show/_data/ID=ITM0337679/"
+            ),
+            DigiketSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://gyutto.com/i/item282706"),
+            GyuttoSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
@@ -91,6 +103,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
+            "digiket", "gyutto",
         })
         for s in sources:
             self.assertIsInstance(s["supports_search"], bool)
@@ -313,6 +326,68 @@ class MelonbooksParseTests(unittest.TestCase):
         self.assertNotIn("now_printing", first["thumbnail"])
         self.assertEqual(first["price"], "1,980円")
         self.assertIn("Dishwasher1910", first["category"])
+
+
+class DigiketParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = DigiketSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("digiket_product.html"),
+            "https://www.digiket.com/work/show/_data/ID=ITM0337679/",
+        )
+        self.assertEqual(meta["source"], "digiket")
+        self.assertEqual(meta["title"], "ブスなのにトライアングル！")
+        self.assertEqual(meta["maker"], "きみりんこ。")
+        self.assertEqual(meta["release_date"], "2026-05-02")  # 登録日
+        self.assertEqual(meta["price"], "110円")
+        self.assertEqual(meta["cover_url"], "https://img.digiket.net/cg/337/ITM0337679_1.jpg")
+        self.assertIn("ヒロインはブス", meta["description"])
+        self.assertEqual(meta["extra"]["work_type"], "一般向同人 ビジュアルノベル")
+        self.assertIn("恋愛", meta["extra"]["tags"])
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("digiket_search.html"))
+        self.assertEqual(len(hits), 3)
+        first = hits[0]
+        self.assertIn("CV.安野希世乃", first["title"])
+        self.assertEqual(first["url"], "https://www.digiket.com/work/show/_data/ID=ITM0263644/")
+        self.assertTrue(first["thumbnail"].startswith("https://img.digiket.net/"))
+        self.assertEqual(first["price"], "2530円")
+        self.assertIn("あまかけプラント", first["category"])
+
+
+class GyuttoParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = GyuttoSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("gyutto_product.html"), "https://gyutto.com/i/item282706"
+        )
+        self.assertEqual(meta["source"], "gyutto")
+        self.assertIn("ＡＳＭＲレビュー", meta["title"])
+        self.assertEqual(meta["maker"], "#define")
+        self.assertEqual(meta["release_date"], "2026-03-27")
+        self.assertEqual(meta["cover_url"],
+                         "https://gyutto.com/data/item_img/2827/282706/282706.jpg")
+        self.assertIsNone(meta["price"])  # price is AJAX-rendered on Gyutto
+        self.assertIn("あにまちゃん", meta["description"])
+        self.assertEqual(meta["extra"]["age_rating"], "18禁")
+        self.assertEqual(meta["extra"]["work_type"], "音声作品")
+        self.assertIn("オリジナル", meta["extra"]["genres"])
+        self.assertIn("同人", meta["extra"]["category"])
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("gyutto_search.html"))
+        self.assertGreaterEqual(len(hits), 30)
+        first = hits[0]
+        self.assertEqual(first["url"], "http://gyutto.com/i/item270825")
+        self.assertIn("耳かき", first["title"])
+        self.assertTrue(first["thumbnail"].startswith("https://gyutto.com/data/item_img/"))
+        self.assertEqual(first["price"], "2,090円")
+        self.assertEqual(first["category"], "あうとどあ仙人")
 
 
 class ChilChilParseTests(unittest.TestCase):

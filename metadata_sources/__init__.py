@@ -10,19 +10,26 @@ from .animate import AnimateSource
 from .base import MetadataSource, SourceError
 from .booth import BoothSource
 from .chilchil import ChilChilSource
+from .digiket import DigiketSource
 from .dlsite import DLsiteSource
 from .fanza import FanzaSource
 from .gamers import GamersSource
+from .gyutto import GyuttoSource
 from .melon import MelonbooksSource
 from .rejet import RejetSource
 from .stellaworth import StellaworthSource
 
 # Order matters only for documentation; URL dispatch is exact per-source.
+# (Toranoana is absent by necessity: both the live EC site and every Wayback
+# snapshot of it serve bot-blocked "アクセスエラー" pages, so its markup could
+# not be captured for a parser — revisit if access opens up.)
 SOURCES: list[MetadataSource] = [
     DLsiteSource(),
     BoothSource(),
     FanzaSource(),
     MelonbooksSource(),
+    DigiketSource(),
+    GyuttoSource(),
     GamersSource(),
     AnimateSource(),
     StellaworthSource(),
