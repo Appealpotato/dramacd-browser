@@ -1813,7 +1813,7 @@
                                     <p>This CD's audio hasn't been extracted yet.</p>
                                     <button v-if="pipelineEnabled" class="btn btn-primary player-extract-btn"
                                             @click="extractFromPlayer" :disabled="playerExtracting">
-                                        {{ playerExtracting ? (playerExtractStatus || 'Extracting…') : '✨ Extract audio' }}
+                                        {{ playerExtracting ? (playerExtractStatus || 'Extracting…') : 'Extract' }}
                                     </button>
                                     <p class="player-empty-hint">…or run extraction from Atelier / the bulk-menu's "Run full workflow" in Library.</p>
                                 </div>
