@@ -38,6 +38,11 @@ DLSITE_REQUEST_DELAY = 1.0  # seconds between requests
 DLSITE_SITE_SECTIONS = ["maniax", "home", "girls", "comic", "books", "pro"]
 DLSITE_PROXY_URL = os.environ.get("DRAMACD_DLSITE_PROXY", "").strip() or None  # e.g., "http://proxy.example.com:8080" or "socks5://127.0.0.1:1080"
 
+# Wayback Machine fallback for delisted DLsite works (fires only when every
+# DLsite lookup 404'd — never on rate limits / transient errors)
+WAYBACK_FALLBACK = _env_bool("DRAMACD_WAYBACK_FALLBACK", default=True)
+WAYBACK_DELAY = float(os.environ.get("DRAMACD_WAYBACK_DELAY", "1.0"))  # courtesy delay between archive.org calls
+
 # Supported archive extensions
 ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z", ".tar"}
 

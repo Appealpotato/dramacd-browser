@@ -8,7 +8,9 @@ from pathlib import Path
 import httpx
 from bs4 import BeautifulSoup
 
+import config
 from config import COVERS_DIR, DLSITE_REQUEST_DELAY, DLSITE_SITE_SECTIONS, DLSITE_PROXY_URL
+from metadata_sources.wayback import fetch_dlsite_via_wayback
 
 logger = logging.getLogger(__name__)
 
@@ -258,10 +260,12 @@ def parse_api_response(data: dict) -> dict:
     return result
 
 
-async def fetch_metadata_for_code(client: httpx.AsyncClient, product_code: str) -> tuple[dict | None, str | None]:
+async def fetch_metadata_for_code(client: httpx.AsyncClient, product_code: str, wayback: bool = True) -> tuple[dict | None, str | None]:
     """Fetch complete metadata for a single product code.
 
-    Tries multiple DLsite site sections until a match is found.
+    Tries multiple DLsite site sections until a match is found. When every
+    lookup hard-404s (delisted work) and `wayback` is on, falls back to an
+    archived copy of the work page via the Wayback Machine.
     Returns (metadata, error_reason).
     """
     metadata = None
@@ -306,7 +310,26 @@ async def fetch_metadata_for_code(client: httpx.AsyncClient, product_code: str) 
                 break
 
     if not metadata:
-        return None, _pick_final_reason(failure_reasons)
+        final_reason = _pick_final_reason(failure_reasons)
+        # Wayback rescue fires ONLY on a hard 404 everywhere (delisted work).
+        # Transient reasons (rate_limited/timeout/server_error/...) must
+        # surface unchanged so retries stay meaningful.
+        if wayback and final_reason == "not_found":
+            wb_meta = await fetch_dlsite_via_wayback(client, product_code)
+            if wb_meta:
+                # No EN locale pass for archived pages — mirror JP values so
+                # downstream EN fields are populated.
+                wb_meta.setdefault("title_en", wb_meta.get("title"))
+                wb_meta.setdefault("tags_en", wb_meta.get("tags", []))
+                wb_meta.setdefault("seiyuu_en", wb_meta.get("seiyuu", []))
+                if wb_meta.get("cover_url"):
+                    local_cover, cover_reason = await download_cover(client, wb_meta["cover_url"], product_code)
+                    if local_cover:
+                        wb_meta["cover_local"] = local_cover
+                    elif cover_reason:
+                        logger.debug(f"Wayback cover download skipped for {product_code}: {cover_reason}")
+                return wb_meta, None
+        return None, final_reason
 
     # Fetch English metadata for translated title/tags
     if matched_site:
@@ -445,7 +468,7 @@ async def fetch_all_metadata(
                     await db.close()
 
             try:
-                metadata, reason = await fetch_metadata_for_code(client, code)
+                metadata, reason = await fetch_metadata_for_code(client, code, wayback=config.WAYBACK_FALLBACK)
                 if metadata:
                     await update_item_metadata(code, metadata)
                     scrape_progress["success"] += 1

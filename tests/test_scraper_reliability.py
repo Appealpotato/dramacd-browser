@@ -62,7 +62,7 @@ class ScraperReliabilityTests(unittest.IsolatedAsyncioTestCase):
             "finished_at": None,
         })
 
-        async def fake_fetch(_client, code):
+        async def fake_fetch(_client, code, wayback=True):
             if code == "RJ00000001":
                 return {"title": "OK"}, None
             return None, "rate_limited"
