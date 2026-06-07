@@ -311,10 +311,36 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         # an imported folder are claimed — they must stay out of unmatched.
         folder_claimed: set[str] = set()
         folders_imported = 0
+        folders_skipped_owned = 0
         for fi in result.get("folder_imports") or []:
             if _scan_stop_event.is_set():
                 break
             code = _stable_manual_code(fi["folder"])
+            # A member already owned by an existing entry (e.g. a manual item
+            # whose archive_path points inside this folder) means this folder
+            # is that entry's home — importing it would duplicate the CD.
+            # Exception: the owner being this same stable code (a rescan).
+            existing_self = await db.get_item_by_product_code(code)
+            self_owned = set()
+            if existing_self:
+                self_owned = {
+                    _basename_lower(f)
+                    for f in json.loads(existing_self.get("files") or "[]")
+                }
+            if any(
+                _basename_lower(f) in claimed_basenames
+                and _basename_lower(f) not in self_owned
+                for f in fi["files"]
+            ):
+                folders_skipped_owned += 1
+                # Don't blanket-claim the folder: unowned siblings (say, a
+                # Vol.2 the entry doesn't know about) should still surface
+                # in the unmatched list instead of vanishing silently.
+                logger.info(
+                    f"Scan: folder {Path(fi['folder']).name} skipped — member file "
+                    "already owned by an existing entry"
+                )
+                continue
             try:
                 created = await _ingest_codeless_entry(
                     code, fi["title"], fi["files"], fi["total_size"],
@@ -331,6 +357,10 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                 logger.info(f"Scan: folder {Path(fi['folder']).name} -> {code} (manual entry)")
         if folders_imported:
             logger.info(f"Scan: {folders_imported} codeless folder(s) imported as manual entries")
+        if folders_skipped_owned:
+            logger.info(
+                f"Scan: {folders_skipped_owned} folder(s) skipped — contents already owned by existing entries"
+            )
 
         # Non-DLsite fallthrough: an unmatched archive (no DLsite code in its name) may
         # still declare its own identity + metadata via a bundled *.package.json. If so,

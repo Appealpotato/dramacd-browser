@@ -165,5 +165,66 @@ class RunScanIngestionTests(unittest.TestCase):
             self.assertEqual(unmatched, ["stray.mp3"])
 
 
+class ClaimedFolderTests(unittest.TestCase):
+    """Regression: a folder whose archive is already owned by an existing
+    entry (archive_path / Browse flow) must NOT import as a duplicate —
+    but a folder-per-CD layout still imports fresh folders, and rescans of
+    a folder-imported entry keep working (self-ownership exception)."""
+
+    def setUp(self):
+        self._tmpdb = tempfile.TemporaryDirectory()
+        self._old_db_path = database.DB_PATH
+        database.DB_PATH = Path(self._tmpdb.name) / "test.db"
+        asyncio.run(database.init_db())
+
+    def tearDown(self):
+        database.DB_PATH = self._old_db_path
+        self._tmpdb.cleanup()
+
+    def test_owned_folder_member_blocks_import_but_rescan_self_ok(self):
+        from routers.scan import run_scan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owned_dir = root / "Seventh Heaven Vol.1"
+            owned_dir.mkdir()
+            owned_archive = owned_dir / "Seventh Heaven Vol.1.7z"
+            owned_archive.write_bytes(b"7zjunk")
+            fresh_dir = root / "CRAZY CIRCUS"
+            fresh_dir.mkdir()
+            (fresh_dir / "Vol1.zip").write_bytes(b"PK\x05\x06" + b"\0" * 18)
+
+            async def _seed():
+                async with aiosqlite.connect(database.DB_PATH) as conn:
+                    await conn.execute(
+                        """INSERT INTO items (product_code, title, kind, is_manual, files,
+                                              file_count, created_at, updated_at)
+                           VALUES ('MAN-EXISTING1', 'SEVENTH HEAVEN', 'drama_cd', 1, ?, 1,
+                                   '2026-01-01', '2026-01-01')""",
+                        (json.dumps([str(owned_archive)]),),
+                    )
+                    await conn.commit()
+
+            asyncio.run(_seed())
+            asyncio.run(run_scan(scan_paths=[str(root)], recursive=True))
+
+            async def _rows():
+                async with aiosqlite.connect(database.DB_PATH) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    cur = await conn.execute("SELECT product_code, title FROM items")
+                    return [dict(r) for r in await cur.fetchall()]
+
+            rows = asyncio.run(_rows())
+            titles = sorted(r["title"] for r in rows if r["title"])
+            # no duplicate of the owned CD; the fresh folder still imports
+            self.assertEqual(titles, ["CRAZY CIRCUS", "SEVENTH HEAVEN"])
+
+            # rescan: the folder-imported entry (self-owned files) must not
+            # get blocked by its own claim, and still no duplicates
+            asyncio.run(run_scan(scan_paths=[str(root)], recursive=True))
+            rows2 = asyncio.run(_rows())
+            self.assertEqual(len(rows2), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
