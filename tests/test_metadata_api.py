@@ -4,6 +4,7 @@ import asyncio
 import sys
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -66,7 +67,10 @@ class FetchSearchTests(unittest.TestCase):
             resp = client.get("/api/metadata/sources")
         self.assertEqual(resp.status_code, 200)
         names = {s["name"] for s in resp.json()["sources"]}
-        self.assertEqual(names, {"dlsite", "gamers", "chil_chil", "rejet"})
+        self.assertEqual(names, {
+            "dlsite", "gamers", "chil_chil", "rejet",
+            "booth", "animate", "stellaworth",
+        })
 
     def test_fetch_url_dispatch_and_preview(self):
         source = metadata_sources.get_source("chil_chil")
@@ -85,16 +89,19 @@ class FetchSearchTests(unittest.TestCase):
         self.assertEqual(resp.status_code, 400)
 
     def test_search_all_sources_with_partial_failure(self):
-        gamers = metadata_sources.get_source("gamers")
-        chilchil = metadata_sources.get_source("chil_chil")
-        rejet = metadata_sources.get_source("rejet")
-        dlsite = metadata_sources.get_source("dlsite")
         hit = {"source": "chil_chil", "title": "t", "url": "u", "thumbnail": None,
                "release_date": None, "price": None, "category": "CD"}
-        with patch.object(gamers, "search", AsyncMock(side_effect=RuntimeError("boom"))), \
-             patch.object(chilchil, "search", AsyncMock(return_value=[hit])), \
-             patch.object(rejet, "search", AsyncMock(return_value=[])), \
-             patch.object(dlsite, "search", AsyncMock(return_value=[])):
+        # Patch every registered source so no test ever hits the network,
+        # including sources added after this test was written.
+        with ExitStack() as stack:
+            for source in metadata_sources.SOURCES:
+                if source.name == "gamers":
+                    mock = AsyncMock(side_effect=RuntimeError("boom"))
+                elif source.name == "chil_chil":
+                    mock = AsyncMock(return_value=[hit])
+                else:
+                    mock = AsyncMock(return_value=[])
+                stack.enter_context(patch.object(source, "search", mock))
             with TestClient(self.app) as client:
                 resp = client.post("/api/metadata/search", json={"query": "xyz"})
         self.assertEqual(resp.status_code, 200)

@@ -7,12 +7,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import metadata_sources
+from metadata_sources.animate import AnimateSource
 from metadata_sources.base import empty_metadata, normalize_date
+from metadata_sources.booth import BoothSource
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.dlsite import DLsiteSource
 from metadata_sources.gamers import GamersSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
+from metadata_sources.stellaworth import StellaworthSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -47,13 +50,34 @@ class RegistryTests(unittest.TestCase):
             ),
             DLsiteSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://booth.pm/ja/items/1149620"),
+            BoothSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://ykmrc.booth.pm/items/1149620"),
+            BoothSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://www.animate-onlineshop.jp/pd/3465774/"),
+            AnimateSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://www.stellaworth.co.jp/shop/item.php?item_id=1nkCHY1d11d"
+            ),
+            StellaworthSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
     def test_list_sources_shape(self):
         sources = metadata_sources.list_sources()
         names = {s["name"] for s in sources}
-        self.assertEqual(names, {"dlsite", "gamers", "chil_chil", "rejet"})
+        self.assertEqual(names, {
+            "dlsite", "gamers", "chil_chil", "rejet",
+            "booth", "animate", "stellaworth",
+        })
         for s in sources:
             self.assertTrue(s["supports_search"])
             self.assertTrue(s["url_example"])
@@ -97,6 +121,117 @@ class GamersParseTests(unittest.TestCase):
         self.assertTrue(first["thumbnail"])
         self.assertRegex(first["release_date"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertIn("円", first["price"])
+
+
+class BoothParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = BoothSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("booth_product.html"), "https://booth.pm/ja/items/1149620"
+        )
+        self.assertEqual(meta["source"], "booth")
+        self.assertEqual(meta["title"], "ドラマCD")
+        self.assertEqual(meta["maker"], "_")
+        self.assertEqual(meta["price"], "1,500円")
+        self.assertIn("booth.pximg.net", meta["cover_url"])
+        self.assertIn("ゆきむら。", meta["description"])
+        self.assertEqual(meta["extra"]["shop_url"], "https://ykmrc.booth.pm/")
+        self.assertEqual(meta["extra"]["availability"], "OutOfStock")
+        self.assertEqual(meta["extra"]["event"], "c95")
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("booth_search.html"))
+        self.assertGreater(len(hits), 10)
+        for h in hits:
+            self.assertIn("/items/", h["url"])
+            self.assertTrue(h["title"])
+        first = hits[0]
+        self.assertTrue(first["thumbnail"])
+        self.assertIn("¥", first["price"])
+        self.assertTrue(first["category"])
+
+
+class StellaworthParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = StellaworthSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("stellaworth_product.html"),
+            "https://www.stellaworth.co.jp/shop/item.php?item_id=1nkCHY1d11d",
+        )
+        self.assertEqual(meta["source"], "stellaworth")
+        self.assertIn("艶が〜るドラマCD 徳川慶喜", meta["title"])
+        self.assertEqual(meta["jan"], "4589645320040")
+        self.assertEqual(meta["maker"], "Moon Bear")
+        self.assertIsNone(meta["release_date"])  # 未定
+        self.assertIn("税込￥4,400", meta["price"])
+        self.assertIsNone(meta["cover_url"])  # noimg placeholder skipped
+        self.assertEqual(meta["extra"]["category"], "CD / ドラマCD")
+        # tokuten box
+        self.assertTrue(any("ブロマイド" in t for t in meta["extra"]["tokuten"]))
+        self.assertTrue(any("ステラワース特典" in t for t in meta["extra"]["tokuten"]))
+        # 【キャスト】 block: ・役名：声優名 lines
+        self.assertIn("浪川大輔", meta["seiyuu"])
+        self.assertIn("石田彰", meta["seiyuu"])
+        self.assertIn("小岩井ことり", meta["seiyuu"])
+        self.assertEqual(len(meta["seiyuu"]), 11)
+        self.assertIn("艶が〜る", meta["description"])
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("stellaworth_search.html"))
+        self.assertGreaterEqual(len(hits), 5)
+        first = hits[0]
+        self.assertIn("艶が〜るドラマCD", first["title"])
+        self.assertEqual(
+            first["url"],
+            "https://www.stellaworth.co.jp/shop/item.php?item_id=1nkCHY1d11d",
+        )
+        self.assertIsNone(first["thumbnail"])  # noimg placeholder
+        self.assertIsNone(first["release_date"])  # 未定
+        self.assertIn("税込￥4,400", first["price"])
+        self.assertIn("CD", first["category"])
+        self.assertIn("Moon Bear", first["category"])
+        # an item with a real cover keeps its thumbnail
+        self.assertTrue(any(h["thumbnail"] for h in hits))
+
+
+class AnimateParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = AnimateSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("animate_product.html"),
+            "https://www.animate-onlineshop.jp/pd/3465774/",
+        )
+        self.assertEqual(meta["source"], "animate")
+        self.assertEqual(meta["title"], "【ドラマCD】イヤって言ってもきかないで")
+        self.assertEqual(meta["price"], "5,940円")
+        self.assertEqual(meta["release_date"], "2026-07-29")
+        self.assertEqual(meta["catalog_number"], "CRWS-119")
+        self.assertEqual(meta["jan"], "4560317788320")
+        self.assertIn("techorus-cdn.com", meta["cover_url"])
+        # ≪キャスト≫ block: "役名役 声優名" pairs
+        self.assertEqual(meta["seiyuu"], ["阿座上洋平", "坂田将吾"])
+        self.assertIn("あらすじ", meta["description"])
+        self.assertNotIn("関連ワード", meta["description"])
+        self.assertTrue(any("メーカー特典" in t for t in meta["extra"]["tokuten"]))
+        self.assertIn("イヤって言ってもきかないで", meta["extra"]["keywords"])
+        self.assertIn("予約受付中", meta["extra"]["availability"])
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("animate_search.html"))
+        self.assertGreater(len(hits), 10)
+        first = hits[0]
+        self.assertEqual(first["title"], "【ドラマCD】イヤって言ってもきかないで")
+        self.assertTrue(first["url"].endswith("/pd/3465774/"))
+        self.assertIn("techorus-cdn.com", first["thumbnail"])
+        self.assertEqual(first["price"], "5,940円")
+        self.assertEqual(first["release_date"], "2026-07-29")
+        self.assertEqual(first["category"], "音楽")
 
 
 class ChilChilParseTests(unittest.TestCase):

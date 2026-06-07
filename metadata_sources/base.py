@@ -71,14 +71,24 @@ class MetadataSource:
     url_example = ""
     supports_search = False
     _url_re: re.Pattern | None = None
+    # Static consent cookies (adult gate / age check) sent with every request.
+    # Never credentials — only fixed flag values like {"adult": "t"}. Sent as
+    # a plain Cookie header (httpx deprecated per-request cookies=).
+    cookies: dict | None = None
 
     def matches_url(self, url: str) -> bool:
         return bool(self._url_re and self._url_re.search(url or ""))
 
+    def _headers(self) -> dict:
+        if not self.cookies:
+            return HEADERS
+        cookie = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+        return {**HEADERS, "Cookie": cookie}
+
     async def _get(self, client: httpx.AsyncClient, url: str, **kwargs) -> str:
         try:
             resp = await client.get(
-                url, headers=HEADERS, follow_redirects=True,
+                url, headers=self._headers(), follow_redirects=True,
                 timeout=REQUEST_TIMEOUT, **kwargs,
             )
         except httpx.HTTPError as exc:
@@ -90,7 +100,7 @@ class MetadataSource:
     async def _post(self, client: httpx.AsyncClient, url: str, data: dict) -> str:
         try:
             resp = await client.post(
-                url, headers=HEADERS, data=data, follow_redirects=True,
+                url, headers=self._headers(), data=data, follow_redirects=True,
                 timeout=REQUEST_TIMEOUT,
             )
         except httpx.HTTPError as exc:

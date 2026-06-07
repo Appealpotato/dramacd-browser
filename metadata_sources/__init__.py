@@ -6,16 +6,22 @@ normalized dict shape so the API/UI layer is source-agnostic.
 DLsite is NOT here — scraper.py owns the DLsite flow for scanned items.
 These sources back the paste-URL / search flow for entries that have no
 DLsite page (store tokutens, physical-only releases, etc.)."""
+from .animate import AnimateSource
 from .base import MetadataSource, SourceError
+from .booth import BoothSource
 from .chilchil import ChilChilSource
 from .dlsite import DLsiteSource
 from .gamers import GamersSource
 from .rejet import RejetSource
+from .stellaworth import StellaworthSource
 
 # Order matters only for documentation; URL dispatch is exact per-source.
 SOURCES: list[MetadataSource] = [
     DLsiteSource(),
+    BoothSource(),
     GamersSource(),
+    AnimateSource(),
+    StellaworthSource(),
     ChilChilSource(),
     RejetSource(),
 ]
