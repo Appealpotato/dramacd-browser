@@ -12,7 +12,9 @@ from metadata_sources.base import empty_metadata, normalize_date
 from metadata_sources.booth import BoothSource
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.dlsite import DLsiteSource
+from metadata_sources.fanza import FanzaSource
 from metadata_sources.gamers import GamersSource
+from metadata_sources.melon import MelonbooksSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
 from metadata_sources.stellaworth import StellaworthSource
@@ -68,6 +70,18 @@ class RegistryTests(unittest.TestCase):
             ),
             StellaworthSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=d_203316/"
+            ),
+            FanzaSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://www.melonbooks.co.jp/detail/detail.php?product_id=200090"
+            ),
+            MelonbooksSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
@@ -76,11 +90,14 @@ class RegistryTests(unittest.TestCase):
         names = {s["name"] for s in sources}
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
-            "booth", "animate", "stellaworth",
+            "booth", "animate", "stellaworth", "fanza", "melon",
         })
         for s in sources:
-            self.assertTrue(s["supports_search"])
+            self.assertIsInstance(s["supports_search"], bool)
             self.assertTrue(s["url_example"])
+        searchable = {s["name"] for s in sources if s["supports_search"]}
+        # fanza is URL-paste only (search shape unverifiable behind the WAF)
+        self.assertEqual(names - searchable, {"fanza"})
 
 
 class NormalizeDateTests(unittest.TestCase):
@@ -232,6 +249,70 @@ class AnimateParseTests(unittest.TestCase):
         self.assertEqual(first["price"], "5,940円")
         self.assertEqual(first["release_date"], "2026-07-29")
         self.assertEqual(first["category"], "音楽")
+
+
+class FanzaParseTests(unittest.TestCase):
+    """Fixture is Wayback-archived markup (live site is region-blocked)."""
+
+    def setUp(self):
+        self.source = FanzaSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("fanza_product.html"),
+            "https://www.dmm.co.jp/dc/doujin/-/detail/=/cid=d_203316/",
+        )
+        self.assertEqual(meta["source"], "fanza")
+        self.assertIn("グルメレビューサイト", meta["title"])
+        self.assertNotIn("30％OFF", meta["title"])  # campaign badge stripped
+        self.assertEqual(meta["maker"], "ラブリテス")
+        self.assertEqual(meta["release_date"], "2021-05-29")
+        self.assertEqual(meta["price"], "880円")  # circle price, not campaign 616
+        self.assertIn("doujin-assets.dmm.co.jp", meta["cover_url"])
+        self.assertIn("d_203316", meta["cover_url"])
+        self.assertIsNone(meta["series"])  # "----" skipped
+        self.assertIn("genres", meta["extra"])
+        self.assertIn("妊娠・孕ませ", meta["extra"]["genres"])
+        self.assertIn("あらすじ", meta["description"])
+        self.assertIn("rating", meta["extra"])
+        self.assertTrue(meta["extra"]["rating"].startswith("4.13"))
+
+
+class MelonbooksParseTests(unittest.TestCase):
+    """Fixtures are Wayback-archived markup (live site WAF-blocks httpx)."""
+
+    def setUp(self):
+        self.source = MelonbooksSource()
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("melon_product.html"),
+            "https://www.melonbooks.co.jp/detail/detail.php?product_id=200090",
+        )
+        self.assertEqual(meta["source"], "melon")
+        self.assertEqual(meta["title"], "輿水幸子の好き好きプロデューサー")
+        self.assertEqual(meta["maker"], "あまみどころ")  # (作品数:24) stripped
+        self.assertEqual(meta["extra"]["author"], "あまー")
+        # shop 発売日 (2017/01/22) beats event 発行日 (2016/12/31)
+        self.assertEqual(meta["release_date"], "2017-01-22")
+        self.assertEqual(meta["price"], "628円")
+        self.assertTrue(meta["cover_url"].startswith("https://melonbooks.akamaized.net/"))
+        self.assertIn("誕生日の幸子", meta["description"])
+        self.assertIn("コミックマーケット91", meta["extra"]["event"])
+        self.assertIn("THE IDOLM@STER", meta["extra"]["genres"])
+        self.assertIn("tags", meta["extra"])
+
+    def test_parse_search(self):
+        hits = self.source.parse_search(fixture("melon_search.html"))
+        self.assertGreater(len(hits), 10)
+        first = hits[0]
+        self.assertEqual(first["title"], "恍惚に溺れる")
+        self.assertIn("detail.php?product_id=2171429", first["url"])
+        self.assertTrue(first["url"].startswith("https://www.melonbooks.co.jp/"))
+        self.assertTrue(first["thumbnail"].startswith("https://melonbooks.akamaized.net/"))
+        self.assertNotIn("now_printing", first["thumbnail"])
+        self.assertEqual(first["price"], "1,980円")
+        self.assertIn("Dishwasher1910", first["category"])
 
 
 class ChilChilParseTests(unittest.TestCase):

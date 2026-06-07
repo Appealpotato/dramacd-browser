@@ -2732,6 +2732,7 @@ const app = createApp({
         const META_SOURCE_LABELS = {
             dlsite: 'DLsite', gamers: 'Gamers', chil_chil: 'Chil-Chil', rejet: 'Rejet', vgmdb: 'VGMdb',
             booth: 'BOOTH', animate: 'animate', stellaworth: 'Stellaworth',
+            fanza: 'FANZA Doujin', melon: 'Melonbooks',
         };
         function metaSourceLabel(name) {
             return META_SOURCE_LABELS[name] || name || '?';

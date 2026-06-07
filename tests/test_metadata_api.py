@@ -69,7 +69,7 @@ class FetchSearchTests(unittest.TestCase):
         names = {s["name"] for s in resp.json()["sources"]}
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
-            "booth", "animate", "stellaworth",
+            "booth", "animate", "stellaworth", "fanza", "melon",
         })
 
     def test_fetch_url_dispatch_and_preview(self):

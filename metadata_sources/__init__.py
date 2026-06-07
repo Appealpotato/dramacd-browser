@@ -11,7 +11,9 @@ from .base import MetadataSource, SourceError
 from .booth import BoothSource
 from .chilchil import ChilChilSource
 from .dlsite import DLsiteSource
+from .fanza import FanzaSource
 from .gamers import GamersSource
+from .melon import MelonbooksSource
 from .rejet import RejetSource
 from .stellaworth import StellaworthSource
 
@@ -19,6 +21,8 @@ from .stellaworth import StellaworthSource
 SOURCES: list[MetadataSource] = [
     DLsiteSource(),
     BoothSource(),
+    FanzaSource(),
+    MelonbooksSource(),
     GamersSource(),
     AnimateSource(),
     StellaworthSource(),
