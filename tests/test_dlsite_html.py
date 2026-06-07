@@ -18,6 +18,7 @@ from metadata_sources.dlsite_html import (
     looks_like_work_page,
     parse_dlsite_work_html,
 )
+from metadata_sources.wayback import WaybackDLsiteSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -77,6 +78,53 @@ class ParseDlsiteWorkHtmlTests(unittest.TestCase):
             "RJ01465184",
         )
         self.assertIsNone(code_from_work_url("https://example.com/x"))
+
+
+class WaybackPasteSourceTests(unittest.TestCase):
+    """WaybackDLsiteSource translates scraper-shape -> source shape."""
+
+    def test_to_source_meta(self):
+        src = WaybackDLsiteSource()
+        parsed = parse_dlsite_work_html(
+            fixture("dlsite_work_page.html"),
+            source_url="https://www.dlsite.com/girls/work/=/product_id/RJ01465184.html",
+        )
+        pasted = ("https://web.archive.org/web/20260101000000id_/"
+                  "https://www.dlsite.com/girls/work/=/product_id/RJ01465184.html")
+        meta = src._to_source_meta(
+            parsed, url=pasted, timestamp="20260101000000",
+            original_url="https://www.dlsite.com/girls/work/=/product_id/RJ01465184.html",
+            code="RJ01465184",
+        )
+        self.assertEqual(meta["source"], "wayback")
+        self.assertIn("明らか危ないお兄さん", meta["title"])
+        self.assertEqual(meta["maker"], "がるまにオリジナル(乙女)")
+        self.assertEqual(meta["release_date"], "2025-09-24")
+        self.assertEqual(meta["seiyuu"], ["主水Ash"])
+        # cover routed through the archive at the pasted timestamp
+        self.assertTrue(meta["cover_url"].startswith(
+            "https://web.archive.org/web/20260101000000im_/"))
+        self.assertEqual(meta["extra"]["product_code"], "RJ01465184")
+        self.assertIn("ASMR", meta["extra"]["tags"])
+        # adopt-code payload is scraper-shaped with EN mirrors + provenance
+        dl = meta["extra"]["dlsite_metadata"]
+        self.assertEqual(dl["title_en"], dl["title"])
+        self.assertEqual(dl["tags_en"], dl["tags"])
+        self.assertTrue(dl["cover_url"].startswith("https://web.archive.org/"))
+        self.assertEqual(dl["raw"]["_wayback"]["timestamp"], "20260101000000")
+
+    def test_url_regex_variants(self):
+        src = WaybackDLsiteSource()
+        self.assertTrue(src.matches_url(
+            "https://web.archive.org/web/20210101id_/https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html"))
+        self.assertTrue(src.matches_url(
+            "http://web.archive.org/web/20210101000000/http://www.dlsite.com/girls/work/=/product_id/BJ123456.html"))
+        # archive of a non-work DLsite page does not match
+        self.assertFalse(src.matches_url(
+            "https://web.archive.org/web/20210101/https://www.dlsite.com/maniax/circle/profile/=/maker_id/RG123.html"))
+        # live DLsite URL does not match
+        self.assertFalse(src.matches_url(
+            "https://www.dlsite.com/maniax/work/=/product_id/RJ123456.html"))
 
 
 class WaybackHookTests(unittest.TestCase):

@@ -19,12 +19,15 @@ from .hvdb import HvdbSource
 from .melon import MelonbooksSource
 from .rejet import RejetSource
 from .stellaworth import StellaworthSource
+from .wayback import WaybackDLsiteSource
 
-# Order matters only for documentation; URL dispatch is exact per-source.
+# URL dispatch is first-match over this list: WaybackDLsiteSource MUST come
+# before DLsiteSource because archive URLs embed the dlsite.com work path.
 # (Toranoana is absent by necessity: both the live EC site and every Wayback
 # snapshot of it serve bot-blocked "アクセスエラー" pages, so its markup could
 # not be captured for a parser — revisit if access opens up.)
 SOURCES: list[MetadataSource] = [
+    WaybackDLsiteSource(),
     DLsiteSource(),
     BoothSource(),
     FanzaSource(),

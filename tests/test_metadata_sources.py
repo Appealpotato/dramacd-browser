@@ -21,6 +21,7 @@ from metadata_sources.melon import MelonbooksSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
 from metadata_sources.stellaworth import StellaworthSource
+from metadata_sources.wayback import WaybackDLsiteSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -99,6 +100,15 @@ class RegistryTests(unittest.TestCase):
             metadata_sources.match_url("https://hvdb.me/Dashboard/Details/01644019"),
             HvdbSource,
         )
+        # archive URLs embed the dlsite.com work path — the Wayback source
+        # must win dispatch over DLsiteSource
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://web.archive.org/web/20160531032104id_/"
+                "https://www.dlsite.com/maniax/work/=/product_id/RJ001255.html"
+            ),
+            WaybackDLsiteSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
@@ -108,14 +118,15 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
-            "digiket", "gyutto", "hvdb",
+            "digiket", "gyutto", "hvdb", "wayback",
         })
         for s in sources:
             self.assertIsInstance(s["supports_search"], bool)
             self.assertTrue(s["url_example"])
         searchable = {s["name"] for s in sources if s["supports_search"]}
-        # fanza is URL-paste only (search shape unverifiable behind the WAF)
-        self.assertEqual(names - searchable, {"fanza"})
+        # fanza is URL-paste only (search shape unverifiable behind the WAF);
+        # wayback is paste-a-snapshot-URL only by nature
+        self.assertEqual(names - searchable, {"fanza", "wayback"})
 
 
 class NormalizeDateTests(unittest.TestCase):
