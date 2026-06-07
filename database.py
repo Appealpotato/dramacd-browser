@@ -2291,23 +2291,57 @@ def _basename_lower(p) -> str:
 
 
 async def get_all_claimed_basenames() -> set[str]:
-    """Basenames of every file already claimed by an item. The scanner uses this to keep
-    files that belong to an existing entry (especially manual/custom MAN-* items) out of
-    the unmatched list and out of the per-scan bundled-package peek."""
+    """Basenames of every file already claimed by an item OR a tokuten. The scanner uses
+    this to keep files that belong to an existing entry (especially manual/custom MAN-*
+    items and tokutens) out of the unmatched list, out of the per-scan bundled-package
+    peek, and out of the codeless folder/loose-archive import.
+
+    items.files holds two shapes: plain strings (scan/manual flows) and
+    {filename, path, size} dicts (tokuten folder-scan flow) — both are handled.
+    tokutens.local_path (stub tokutens from the tokuten path scan) is claimed too."""
     db = await get_db()
     try:
         cursor = await db.execute("SELECT files FROM items WHERE files IS NOT NULL AND files != '[]'")
         rows = await cursor.fetchall()
+        cursor = await db.execute(
+            "SELECT local_path FROM tokutens WHERE local_path IS NOT NULL AND local_path != ''"
+        )
+        tokuten_paths = [r[0] for r in await cursor.fetchall()]
     finally:
         await db.close()
     out: set[str] = set()
     for row in rows:
         try:
             for f in json.loads(row[0] or "[]"):
+                if isinstance(f, dict):
+                    f = f.get("path") or f.get("filename")
                 if f:
                     out.add(_basename_lower(f))
         except Exception:
             continue
+    for p in tokuten_paths:
+        out.add(_basename_lower(p))
+    return out
+
+
+async def get_claimed_local_paths() -> set[str]:
+    """Lowercased absolute paths owned by tokutens (local_path points at the
+    tokuten's folder or archive on disk). The drama-CD scan checks these so a
+    folder that IS a tokuten doesn't get re-imported as a manual drama CD."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT local_path FROM tokutens WHERE local_path IS NOT NULL AND local_path != ''"
+        )
+        rows = await cursor.fetchall()
+    finally:
+        await db.close()
+    out: set[str] = set()
+    for (p,) in rows:
+        try:
+            out.add(str(Path(p).resolve()).lower())
+        except OSError:
+            out.add(str(p).strip().lower())
     return out
 
 

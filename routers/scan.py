@@ -240,6 +240,7 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         # already shelved as unmatched last scan. Both let the bundled-package peek below
         # skip everything except genuinely new archives.
         claimed_basenames = await db.get_all_claimed_basenames()
+        claimed_local_paths = await db.get_claimed_local_paths()
         prev_unmatched_keys = await db.get_unmatched_file_keys()
         await db.clear_unmatched_files()
         ignored_codes = await db.get_ignored_codes()
@@ -320,6 +321,8 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             # whose archive_path points inside this folder) means this folder
             # is that entry's home — importing it would duplicate the CD.
             # Exception: the owner being this same stable code (a rescan).
+            # Folders that ARE a tokuten (tokutens.local_path) are skipped
+            # the same way — they're already in the library.
             existing_self = await db.get_item_by_product_code(code)
             self_owned = set()
             if existing_self:
@@ -327,7 +330,11 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                     _basename_lower(f)
                     for f in json.loads(existing_self.get("files") or "[]")
                 }
-            if any(
+            try:
+                folder_path_key = str(Path(fi["folder"]).resolve()).lower()
+            except OSError:
+                folder_path_key = str(fi["folder"]).strip().lower()
+            if folder_path_key in claimed_local_paths or any(
                 _basename_lower(f) in claimed_basenames
                 and _basename_lower(f) not in self_owned
                 for f in fi["files"]

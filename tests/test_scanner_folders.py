@@ -226,5 +226,78 @@ class ClaimedFolderTests(unittest.TestCase):
             self.assertEqual(len(rows2), 2)
 
 
+class TokutenOwnedTests(unittest.TestCase):
+    """Regression (the ORTANM.7z case): files owned by TOKUTENS — via
+    tokutens.local_path stubs or dict-shaped items.files from the tokuten
+    folder-scan — must not re-import as manual drama CD entries."""
+
+    def setUp(self):
+        self._tmpdb = tempfile.TemporaryDirectory()
+        self._old_db_path = database.DB_PATH
+        database.DB_PATH = Path(self._tmpdb.name) / "test.db"
+        asyncio.run(database.init_db())
+
+    def tearDown(self):
+        database.DB_PATH = self._old_db_path
+        self._tmpdb.cleanup()
+
+    def test_tokuten_owned_archive_and_folder_not_reimported(self):
+        from routers.scan import run_scan
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # stub tokuten: top-level archive registered via tokuten path scan
+            stub_archive = root / "ORTANM.7z"
+            stub_archive.write_bytes(b"7zjunk")
+            # folder tokuten: registered via folder-scan-once (dict-shaped files)
+            tk_folder = root / "Bonus Disc"
+            tk_folder.mkdir()
+            tk_audio = tk_folder / "track01.mp3"
+            tk_audio.write_bytes(b"ID3junk")
+
+            async def _seed():
+                now = "2026-01-01T00:00:00Z"
+                async with aiosqlite.connect(database.DB_PATH) as conn:
+                    await conn.execute(
+                        """INSERT INTO tokutens (kind, title, shop, local_path,
+                                                 created_at, updated_at)
+                           VALUES ('audio', 'ORTANM', 'other', ?, ?, ?)""",
+                        (str(stub_archive), now, now),
+                    )
+                    cur = await conn.execute(
+                        """INSERT INTO tokutens (kind, title, shop, local_path,
+                                                 created_at, updated_at)
+                           VALUES ('audio', 'Bonus Disc', 'other', ?, ?, ?)""",
+                        (str(tk_folder), now, now),
+                    )
+                    tokuten_id = cur.lastrowid
+                    # paired item with the tokuten folder-scan's dict file shape
+                    await conn.execute(
+                        """INSERT INTO items (product_code, title, kind, tokuten_id,
+                                              is_manual, files, file_count,
+                                              created_at, updated_at)
+                           VALUES ('TKT-OWNED00001', 'Bonus Disc', 'tokuten_audio', ?,
+                                   1, ?, 1, ?, ?)""",
+                        (tokuten_id,
+                         json.dumps([{"filename": tk_audio.name, "path": str(tk_audio), "size": 7}]),
+                         now, now),
+                    )
+                    await conn.commit()
+
+            asyncio.run(_seed())
+            asyncio.run(run_scan(scan_paths=[str(root)], recursive=True))
+
+            async def _rows():
+                async with aiosqlite.connect(database.DB_PATH) as conn:
+                    conn.row_factory = aiosqlite.Row
+                    cur = await conn.execute(
+                        "SELECT product_code, title FROM items WHERE product_code LIKE 'MAN-%'"
+                    )
+                    return [dict(r) for r in await cur.fetchall()]
+
+            dupes = asyncio.run(_rows())
+            self.assertEqual(dupes, [], f"tokuten-owned files re-imported: {dupes}")
+
+
 if __name__ == "__main__":
     unittest.main()
