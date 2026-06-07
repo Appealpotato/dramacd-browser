@@ -6467,3 +6467,8 @@ input[type="radio"]:disabled {
 .gallery-remove {
     flex: 0 0 auto;
 }
+
+/* Player empty-state extract button */
+.player-extract-btn {
+    margin: 10px 0;
+}

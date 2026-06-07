@@ -2240,6 +2240,17 @@ const app = createApp({
             };
             detailEditing.value = true;
             detailSaveError.value = '';
+            // Codeless entries (folder/loose-archive imports, hand-created
+            // cards) with no metadata yet: pre-run the multi-source search
+            // with the title so matches are already waiting when the panel
+            // opens. Hand-edited entries (cast/description present) are
+            // assumed matched and left alone.
+            const placeholder = !s.title || s.title === '[New Drama CD]' || s.title === '[New Tokuten]';
+            const hasMeta = (parseJson(s.seiyuu) || []).length > 0 || !!(s.description || '').trim();
+            if (s.is_manual && !placeholder && !hasMeta && !metaSearchQuery.value) {
+                metaSearchQuery.value = s.title;
+                runMetaSearch(s.title);
+            }
         }
         function cancelDetailEdit() {
             detailEditing.value = false;
@@ -2719,7 +2730,7 @@ const app = createApp({
             metaFetchFromUrl(hit.url);
         }
         const META_SOURCE_LABELS = {
-            gamers: 'Gamers', chil_chil: 'Chil-Chil', rejet: 'Rejet', vgmdb: 'VGMdb',
+            dlsite: 'DLsite', gamers: 'Gamers', chil_chil: 'Chil-Chil', rejet: 'Rejet', vgmdb: 'VGMdb',
         };
         function metaSourceLabel(name) {
             return META_SOURCE_LABELS[name] || name || '?';
@@ -2787,6 +2798,10 @@ const app = createApp({
             if (_metaTargetKind() === 'tokuten') {
                 fields.shop = true;
                 fields.source_url = true;
+            } else if ((meta.extra || {}).product_code) {
+                // DLsite hit on a manual item: adopting the real code unlocks
+                // the full standard pipeline (scan refresh, tags, age rating).
+                fields.adopt_code = true;
             }
             metaPreviewFields.value = fields;
             metaPreview.value = meta;
@@ -6429,6 +6444,71 @@ const app = createApp({
             return true;
         }
 
+        // === Player-tab inline extraction ===
+        // "I thought scan would do the trick" — extraction is on-demand by
+        // design (disk space), but the Player shouldn't strand the user on
+        // an empty state. One button queues the extract job, polls until it
+        // lands, then reloads the track list so playback can start.
+        const playerExtracting = ref(false);
+        const playerExtractStatus = ref('');
+        let _playerExtractTimer = null;
+        async function extractFromPlayer() {
+            if (!playerItemId.value || playerExtracting.value) return;
+            const itemId = Number(playerItemId.value);
+            playerExtracting.value = true;
+            playerExtractStatus.value = 'Queuing…';
+            let ok = false;
+            try {
+                ok = await queueExtractionForItem(itemId, false);
+            } catch (err) {
+                pipelineLoadError.value = 'Failed to queue extraction';
+            }
+            if (!ok) {
+                playerExtracting.value = false;
+                playerExtractStatus.value = '';
+                return;
+            }
+            playerExtractStatus.value = 'Extracting…';
+            let polls = 0;
+            const poll = async () => {
+                // User moved to another CD — stop minding this job.
+                if (Number(playerItemId.value) !== itemId) {
+                    playerExtracting.value = false;
+                    playerExtractStatus.value = '';
+                    return;
+                }
+                polls += 1;
+                try {
+                    const resp = await fetch(`/api/pipeline/items/${itemId}/extract/status`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const st = data.status;
+                        if (st === 'completed') {
+                            playerExtracting.value = false;
+                            playerExtractStatus.value = '';
+                            pushToast({ kind: 'success', title: 'Extraction complete', ttl: 3000 });
+                            await loadPlayerItemTracks();
+                            return;
+                        }
+                        if (st === 'failed' || st === 'stopped') {
+                            playerExtracting.value = false;
+                            playerExtractStatus.value = '';
+                            pipelineLoadError.value = (data.job && data.job.error) || 'Extraction failed';
+                            return;
+                        }
+                    }
+                } catch (_) { /* transient — keep polling */ }
+                if (polls >= 300) { // ~10 min safety cap
+                    playerExtracting.value = false;
+                    playerExtractStatus.value = '';
+                    pipelineLoadError.value = 'Extraction is taking unusually long — check Atelier';
+                    return;
+                }
+                _playerExtractTimer = setTimeout(poll, 2000);
+            };
+            _playerExtractTimer = setTimeout(poll, 2000);
+        }
+
         async function queueExtractionForCurrentItem() {
             if (!pipelineSelectedItemId.value) {
                 pipelineLoadError.value = 'Enter a valid item id';
@@ -9442,6 +9522,7 @@ const app = createApp({
             selectListenStatusOption, closeListenStatusDropdown,
             // Player
             playerItemId, playerAvailableTracks, playerAvailableGroups, playerActiveGroup, switchPlayerVariant,
+            playerExtracting, playerExtractStatus, extractFromPlayer,
             playerMissingAudioCount, onPlayerAudioError,
             playerTrackId, playerTrackTitle, playerTrackDuration, playerIsPlaying,
             playerCurrentTime, playerDuration, playerProgressPercent,

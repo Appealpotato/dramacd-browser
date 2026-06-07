@@ -1,6 +1,8 @@
 import asyncio
+import hashlib
 import json
 import logging
+import re
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +14,7 @@ from database import _basename_lower
 from auth import require_api_key
 from config import ARCHIVE_EXTENSIONS
 from models import FetchMetadataRequest, ScanPathsUpdateRequest, ScanRequest
-from scanner import scan_folder_with_progress
+from scanner import clean_title, scan_folder_with_progress
 from scraper import fetch_all_metadata, scrape_progress
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,43 @@ async def _ingest_bundled_package_entry(payload: dict, archive_path: str, size: 
         except Exception as exc:
             logger.warning(f"bundled metadata apply failed for {code}: {exc}")
     return code
+
+
+def _stable_manual_code(path_key: str) -> str:
+    """Deterministic MAN- code from a filesystem path so rescans upsert into
+    the same row instead of stacking duplicates. (Moving the folder changes
+    the hash — that's a new entry, the old one points at the dead path.)"""
+    digest = hashlib.sha1(path_key.strip().lower().encode("utf-8")).hexdigest()
+    return "MAN-" + digest[:12].upper()
+
+
+async def _ingest_codeless_entry(
+    code: str, title: str, files: list[str], total_size: int,
+    formats: list[str], ignored_codes: set,
+) -> bool:
+    """Shared ingest for codeless folders / loose archives → manual item.
+    Files are stored as ABSOLUTE paths (the extractor anchors on those).
+    Title is only written while the entry still looks untouched, so a
+    rescan never clobbers a hand-edited or metadata-applied title."""
+    if code in ignored_codes:
+        return False
+    existing = await db.get_item_by_product_code(code)
+    await db.upsert_item({
+        "product_code": code,
+        "original_code": None,
+        "confidence": "verified",
+        "files": json.dumps(files, ensure_ascii=False),
+        "file_count": len(files),
+        "total_size": total_size,
+        "file_format": json.dumps(formats, ensure_ascii=False),
+    })
+    await db.set_item_is_manual(code, True)
+    already_titled = bool(existing and (existing.get("title") or "").strip())
+    if not already_titled and title:
+        row = await db.get_item_by_product_code(code)
+        if row:
+            await db.update_item_user_data(row["id"], {"title": title})
+    return existing is None
 
 
 # Track scan progress
@@ -266,6 +305,33 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                 }
             )
 
+        # Codeless folder imports: each top-level folder of audio/archives
+        # without any DLsite-coded member becomes one manual entry (stable
+        # MAN-<hash> code so rescans upsert, never duplicate). Files inside
+        # an imported folder are claimed — they must stay out of unmatched.
+        folder_claimed: set[str] = set()
+        folders_imported = 0
+        for fi in result.get("folder_imports") or []:
+            if _scan_stop_event.is_set():
+                break
+            code = _stable_manual_code(fi["folder"])
+            try:
+                created = await _ingest_codeless_entry(
+                    code, fi["title"], fi["files"], fi["total_size"],
+                    fi["formats"], ignored_codes,
+                )
+            except Exception as exc:
+                logger.warning(f"folder import failed for {fi['folder']}: {exc}")
+                continue
+            if code in ignored_codes:
+                continue
+            folder_claimed.update(str(f).lower() for f in fi["files"])
+            if created:
+                folders_imported += 1
+                logger.info(f"Scan: folder {Path(fi['folder']).name} -> {code} (manual entry)")
+        if folders_imported:
+            logger.info(f"Scan: {folders_imported} codeless folder(s) imported as manual entries")
+
         # Non-DLsite fallthrough: an unmatched archive (no DLsite code in its name) may
         # still declare its own identity + metadata via a bundled *.package.json. If so,
         # ingest it as a non-DLsite custom entry; otherwise shelve it as unmatched as before.
@@ -275,12 +341,22 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         if job_id:
             await db.update_job(job_id, current="checking new archives…",
                                 processed_files=result["stats"].get("total_files", 0))
+        scan_root_keys = set()
+        for raw_root in scan_paths or []:
+            try:
+                scan_root_keys.add(str(Path(raw_root).expanduser().resolve()).lower())
+            except OSError:
+                pass
         package_matched = 0
+        loose_imported = 0
         skipped_owned = 0
         for uf in result["unmatched"]:
             if _scan_stop_event.is_set():
                 break
             fp = uf["filepath"]
+            # Claimed by a folder import above — not unmatched.
+            if str(fp).lower() in folder_claimed:
+                continue
             # Already owned by an existing entry (e.g. a manual/custom item)? Then it isn't
             # unmatched at all - keep it out of the list and don't peek it.
             if _basename_lower(fp) in claimed_basenames:
@@ -291,7 +367,8 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             # peeked, so a steady re-scan does ~zero archive reads here.
             seen_before = (str(fp).lower(), int(uf.get("size") or 0)) in prev_unmatched_keys
             code = None
-            if not seen_before and Path(fp).suffix.lower() in ARCHIVE_EXTENSIONS:
+            is_archive = Path(fp).suffix.lower() in ARCHIVE_EXTENSIONS
+            if not seen_before and is_archive:
                 try:
                     payload = await asyncio.to_thread(find_package_in_archive, fp)
                     if payload:
@@ -301,12 +378,41 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             if code:
                 package_matched += 1
                 logger.info(f"Scan: non-DLsite archive {Path(fp).name} -> {code} (bundled package metadata)")
-            else:
-                await db.add_unmatched_file(uf["filename"], uf["filepath"], uf["size"])
+                continue
+            # Codeless TOP-LEVEL archive (sits directly in a scan root):
+            # import as a manual entry from the cleaned filename. Multi-part
+            # sets share one entry — the part marker is stripped from the
+            # grouping key so every .partN upserts into the same code.
+            try:
+                parent_key = str(Path(fp).parent.resolve()).lower()
+            except OSError:
+                parent_key = ""
+            if is_archive and parent_key in scan_root_keys:
+                p = Path(fp)
+                series_stem = re.sub(r"\.part\d+$", "", p.stem, flags=re.IGNORECASE)
+                group_key = str(p.with_name(series_stem + p.suffix))
+                loose_code = _stable_manual_code(group_key)
+                try:
+                    created = await _ingest_codeless_entry(
+                        loose_code, clean_title(series_stem), [str(p)],
+                        int(uf.get("size") or 0), [], ignored_codes,
+                    )
+                    if loose_code not in ignored_codes:
+                        if created:
+                            loose_imported += 1
+                            logger.info(f"Scan: loose archive {p.name} -> {loose_code} (manual entry)")
+                        continue
+                except Exception as exc:
+                    logger.warning(f"loose-archive import failed for {fp}: {exc}")
+            await db.add_unmatched_file(uf["filename"], uf["filepath"], uf["size"])
         if package_matched:
             logger.info(f"Scan: {package_matched} non-DLsite archive(s) matched via bundled package")
+        if loose_imported:
+            logger.info(f"Scan: {loose_imported} loose codeless archive(s) imported as manual entries")
         if skipped_owned:
             logger.info(f"Scan: {skipped_owned} archive(s) already owned by an entry - kept out of unmatched")
+        result["stats"]["folders_imported"] = folders_imported
+        result["stats"]["loose_archives_imported"] = loose_imported
 
         stats = result["stats"]
         scan_state["result"] = stats

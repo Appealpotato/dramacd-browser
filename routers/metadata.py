@@ -6,6 +6,7 @@ the UI shows the normalized result with per-field checkboxes and posts the
 A fetch therefore never silently clobbers hand-edited data."""
 import asyncio
 import logging
+import re
 from datetime import datetime
 
 import httpx
@@ -30,8 +31,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/metadata")
 
 # Field names the UI may request; anything else in `fields` is ignored.
-ITEM_FIELDS = {"title", "release_date", "seiyuu", "description", "cover", "source_note"}
-TOKUTEN_FIELDS = ITEM_FIELDS | {"shop", "source_url"}
+ITEM_FIELDS = {"title", "release_date", "seiyuu", "description", "cover",
+               "source_note", "adopt_code"}
+TOKUTEN_FIELDS = (ITEM_FIELDS - {"adopt_code"}) | {"shop", "source_url"}
+
+_PRODUCT_CODE_RE = re.compile(r"^(RJ|BJ|VJ)\d{6,8}$")
 
 
 @router.get("/sources")
@@ -274,6 +278,33 @@ async def _apply_to_item(item_id: int, meta: dict, fields: set[str]) -> dict:
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
+    applied_extra: list[str] = []
+    # Adopt-code: promote a codeless/manual item into a fully coded DLsite
+    # item. override_product_code clears stale metadata; the source's
+    # scraped payload (carried in extra) is persisted directly so no second
+    # network round-trip is needed. Remaining checked fields then apply on
+    # top of the refreshed row (for a DLsite hit they're the same values).
+    code = ((meta.get("extra") or {}).get("product_code") or "").strip().upper()
+    if "adopt_code" in fields and code:
+        if not _PRODUCT_CODE_RE.match(code):
+            raise HTTPException(status_code=400, detail=f"Invalid product code: {code}")
+        if item.get("kind") == "tokuten_audio":
+            raise HTTPException(
+                status_code=400, detail="Tokuten cards keep their synthetic code"
+            )
+        if item.get("product_code") != code:
+            updated = await db.override_product_code(item_id, code)
+            if updated is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{code} already exists in the library",
+                )
+        dl_meta = (meta.get("extra") or {}).get("dlsite_metadata")
+        if dl_meta:
+            await db.update_item_metadata(code, dl_meta)
+        applied_extra.append("adopt_code")
+        item = await db.get_item(item_id)  # refreshed baseline
+
     data: dict = {}
     if "title" in fields and meta.get("title"):
         data["title"] = meta["title"]
@@ -287,12 +318,15 @@ async def _apply_to_item(item_id: int, meta: dict, fields: set[str]) -> dict:
     if "source_note" in fields:
         data["notes"] = _append_note(item.get("notes"), _build_source_note(meta))
 
-    applied = sorted(fields & set(data) | ({"source_note"} if "notes" in data else set()))
+    applied = sorted(
+        (fields & set(data) | ({"source_note"} if "notes" in data else set()))
+    ) + applied_extra
     if data:
         await db.update_item_user_data(item_id, data)
 
     gallery_added = 0
-    if "cover" in fields and meta.get("cover_url"):
+    # adopt_code already persisted cover_local via the scraper payload.
+    if "cover" in fields and meta.get("cover_url") and "adopt_code" not in applied:
         cover_local = await _download_cover_for(meta, item["product_code"])
         await db.set_item_cover(item_id, cover_local, meta["cover_url"])
         applied.append("cover")

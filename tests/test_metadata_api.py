@@ -66,7 +66,7 @@ class FetchSearchTests(unittest.TestCase):
             resp = client.get("/api/metadata/sources")
         self.assertEqual(resp.status_code, 200)
         names = {s["name"] for s in resp.json()["sources"]}
-        self.assertEqual(names, {"gamers", "chil_chil", "rejet"})
+        self.assertEqual(names, {"dlsite", "gamers", "chil_chil", "rejet"})
 
     def test_fetch_url_dispatch_and_preview(self):
         source = metadata_sources.get_source("chil_chil")
@@ -88,11 +88,13 @@ class FetchSearchTests(unittest.TestCase):
         gamers = metadata_sources.get_source("gamers")
         chilchil = metadata_sources.get_source("chil_chil")
         rejet = metadata_sources.get_source("rejet")
+        dlsite = metadata_sources.get_source("dlsite")
         hit = {"source": "chil_chil", "title": "t", "url": "u", "thumbnail": None,
                "release_date": None, "price": None, "category": "CD"}
         with patch.object(gamers, "search", AsyncMock(side_effect=RuntimeError("boom"))), \
              patch.object(chilchil, "search", AsyncMock(return_value=[hit])), \
-             patch.object(rejet, "search", AsyncMock(return_value=[])):
+             patch.object(rejet, "search", AsyncMock(return_value=[])), \
+             patch.object(dlsite, "search", AsyncMock(return_value=[])):
             with TestClient(self.app) as client:
                 resp = client.post("/api/metadata/search", json={"query": "xyz"})
         self.assertEqual(resp.status_code, 200)
@@ -354,6 +356,95 @@ class ApplyTests(unittest.TestCase):
             self.assertEqual(resp.status_code, 200)
             resp = client.get(f"/api/items/{self.multi_item_id}/media")
             self.assertEqual(resp.json()["media"], [])
+
+    def test_apply_adopt_code_promotes_manual_item(self):
+        """Adopting a DLsite hit's code overrides the synthetic code and
+        persists the carried scraper payload — no refetch."""
+
+        async def _seed_item():
+            async with aiosqlite.connect(database.DB_PATH) as conn:
+                await conn.execute(
+                    """INSERT INTO items (product_code, title, kind, is_manual,
+                                          notes, created_at, updated_at)
+                       VALUES ('MAN-ADOPT01', 'soine cd', 'drama_cd', 1, '', ?, ?)""",
+                    (NOW, NOW),
+                )
+                await conn.commit()
+                cur = await conn.execute(
+                    "SELECT id FROM items WHERE product_code = 'MAN-ADOPT01'"
+                )
+                return (await cur.fetchone())[0]
+
+        item_id = asyncio.run(_seed_item())
+        meta = empty_metadata("dlsite", "https://www.dlsite.com/girls/work/=/product_id/RJ332208.html")
+        meta["title"] = "週刊添い寝CD vol.1"
+        meta["seiyuu"] = ["誰か"]
+        meta["catalog_number"] = "RJ332208"
+        meta["extra"]["product_code"] = "RJ332208"
+        meta["extra"]["dlsite_metadata"] = {
+            "title": "週刊添い寝CD vol.1",
+            "title_en": "Weekly Soine CD vol.1",
+            "circle": "メーカーX",
+            "seiyuu": ["誰か"],
+            "tags": ["癒し"],
+            "release_date": "2021-06-01",
+            "description": "おやすみ前のCD",
+            "cover_local": "data/covers/RJ332208.jpg",
+        }
+        with TestClient(self.app) as client:
+            resp = client.post(
+                "/api/metadata/apply",
+                json={"target": "item", "target_id": item_id,
+                      "metadata": meta,
+                      "fields": ["adopt_code", "source_note"]},
+            )
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertIn("adopt_code", body["applied"])
+        item = body["item"]
+        self.assertEqual(item["product_code"], "RJ332208")
+        self.assertEqual(item["title"], "週刊添い寝CD vol.1")
+        self.assertEqual(item["title_en"], "Weekly Soine CD vol.1")
+        self.assertEqual(item["circle"], "メーカーX")
+        self.assertIn("癒し", item["tags"])
+        self.assertEqual(item["cover_local"], "data/covers/RJ332208.jpg")
+        self.assertEqual(item["confidence"], "verified")
+        self.assertIn("品番 RJ332208", item["notes"])
+
+    def test_apply_adopt_code_conflict_409(self):
+        """Adopting a code that already exists elsewhere is a 409."""
+        meta = empty_metadata("dlsite", "https://www.dlsite.com/girls/work/=/product_id/RJ332208.html")
+        meta["extra"]["product_code"] = "RJ332208"  # adopted by the test above... or seed our own
+
+        async def _seed_two():
+            async with aiosqlite.connect(database.DB_PATH) as conn:
+                await conn.execute(
+                    """INSERT OR IGNORE INTO items (product_code, title, kind, is_manual,
+                                          notes, created_at, updated_at)
+                       VALUES ('RJ999999', 'existing coded', 'drama_cd', 0, '', ?, ?)""",
+                    (NOW, NOW),
+                )
+                await conn.execute(
+                    """INSERT INTO items (product_code, title, kind, is_manual,
+                                          notes, created_at, updated_at)
+                       VALUES ('MAN-ADOPT02', 'conflict case', 'drama_cd', 1, '', ?, ?)""",
+                    (NOW, NOW),
+                )
+                await conn.commit()
+                cur = await conn.execute(
+                    "SELECT id FROM items WHERE product_code = 'MAN-ADOPT02'"
+                )
+                return (await cur.fetchone())[0]
+
+        item_id = asyncio.run(_seed_two())
+        meta["extra"]["product_code"] = "RJ999999"
+        with TestClient(self.app) as client:
+            resp = client.post(
+                "/api/metadata/apply",
+                json={"target": "item", "target_id": item_id,
+                      "metadata": meta, "fields": ["adopt_code"]},
+            )
+        self.assertEqual(resp.status_code, 409)
 
     def test_media_ownership_guard(self):
         """A media row belonging to another item can't be promoted/deleted

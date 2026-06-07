@@ -72,6 +72,26 @@ def is_part_archive(filename: str) -> bool:
     return bool(PART_PATTERN.search(filename))
 
 
+# Noise tokens commonly bolted onto folder/file names that never belong in a
+# title (or a metadata search): bracketed format/source markers.
+_TITLE_NOISE_RE = re.compile(
+    r"[\[(（【]\s*(?:RAW|MP3|FLAC|WAV|OGG|320K?|V0|HQ|DLSITE|DL版|自炊)\s*[\])）】]",
+    re.IGNORECASE,
+)
+
+
+def clean_title(name: str) -> str:
+    """Folder/file name -> presentable title (and metadata-search query).
+    Deliberately conservative: symbols like ♥★√ are often part of the real
+    title (√HAPPY SUGAR, MOTTO♥LIP ON MY PRINCE), so only obvious noise goes."""
+    out = str(name or "")
+    out = _TITLE_NOISE_RE.sub(" ", out)
+    out = out.replace("_", " ")
+    out = re.sub(r"\s+", " ", out).strip()
+    out = out.strip(" -~・.／/")
+    return out or str(name or "").strip()
+
+
 def get_part_number(filename: str) -> int | None:
     match = re.search(r"\.part(\d+)\.", filename, re.IGNORECASE)
     if match:
@@ -90,6 +110,67 @@ def _iter_scannable_files(paths: list[Path], recursive: bool):
         for entry in iterator:
             if entry.suffix.lower() in scannable:
                 yield entry
+
+
+def _collect_folder_imports(roots: list[Path]) -> tuple[list[dict], list[dict]]:
+    """Codeless-collection support over TOP-LEVEL folders of each scan root.
+    Returns (manual_imports, coded_folder_items):
+
+    - Folder with NO code anywhere (name or members) holding audio/archives
+      → one manual-entry candidate (title from the folder name, contained
+      archives + loose audio as absolute file paths).
+    - Folder whose NAME carries a DLsite code but whose members don't →
+      claimed as that coded item (the standard fetch flow takes over).
+
+    Folders containing any coded FILE are skipped entirely — those files
+    are claimed by the normal per-file flow and the rest stays unmatched."""
+    scannable = ARCHIVE_EXTENSIONS | AUDIO_EXTENSIONS
+    imports: list[dict] = []
+    coded: list[dict] = []
+    for root in roots:
+        try:
+            top_dirs = [d for d in root.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        for folder in top_dirs:
+            code, original, confidence = extract_product_code(folder.name)
+            files: list[Path] = []
+            any_coded_member = False
+            try:
+                for p in folder.rglob("*"):
+                    if not p.is_file() or p.suffix.lower() not in scannable:
+                        continue
+                    member_code, _o, _c = extract_product_code(p.name)
+                    if member_code is not None:
+                        any_coded_member = True
+                        break
+                    files.append(p)
+            except OSError:
+                continue
+            if any_coded_member or not files:
+                continue
+            files.sort()
+            formats = sorted({
+                fmt for fmt in (extract_audio_format(p.name) for p in files) if fmt
+            })
+            entry = {
+                "folder": str(folder),
+                "title": clean_title(folder.name),
+                "files": [str(p) for p in files],
+                "file_count": len(files),
+                "total_size": sum((p.stat().st_size for p in files), 0),
+                "formats": formats,
+            }
+            if code is not None:
+                entry.update({
+                    "product_code": code,
+                    "original_code": original,
+                    "confidence": confidence,
+                })
+                coded.append(entry)
+            else:
+                imports.append(entry)
+    return imports, coded
 
 
 def _normalize_paths(scan_path: str | None = None, scan_paths: list[str] | None = None) -> list[Path]:
@@ -204,15 +285,41 @@ def scan_folder_with_progress(
         item["files"] = sorted(item["files"])
         item["formats"] = sorted(item["formats"])
 
+    # Folder imports only make sense with a recursive walk (and when the
+    # scan wasn't aborted mid-way — a partial coded pass would mislabel
+    # mixed folders as codeless).
+    folder_imports: list[dict] = []
+    if recursive and not stopped:
+        folder_imports, coded_folders = _collect_folder_imports(valid_folders)
+        claimed_paths = {f for fi in folder_imports for f in fi["files"]}
+        # RJ-coded folder names claim their (codeless) members as that item.
+        for cf in coded_folders:
+            item = items[cf["product_code"]]
+            item["product_code"] = cf["product_code"]
+            if item["original_code"] is None:
+                item["original_code"] = cf["original_code"]
+            if cf["confidence"] == "high":
+                item["confidence"] = "high"
+            item["files"] = sorted(set(item["files"]) | set(cf["files"]))
+            item["total_size"] += cf["total_size"]
+            item["file_count"] = len(item["files"])
+            item["formats"] = sorted(set(item["formats"]) | set(cf["formats"]))
+            claimed_paths.update(cf["files"])
+        # Members claimed by either folder flavor aren't unmatched anymore.
+        if claimed_paths:
+            unmatched = [u for u in unmatched if u["filepath"] not in claimed_paths]
+
     return {
         "items": dict(items),
         "unmatched": unmatched,
+        "folder_imports": folder_imports,
         "stats": {
             "total_files": total_files,
             "processed_files": processed_files,
             "matched": processed_files - len(unmatched),
             "unmatched": len(unmatched),
             "unique_codes": len(items),
+            "folder_imports": len(folder_imports) if (recursive and not stopped) else 0,
             "recursive": recursive,
             "scanned_paths": [str(folder) for folder in valid_folders],
             "missing_paths": missing_paths,

@@ -1811,7 +1811,11 @@
                                 <div v-if="playerItemId && playerAvailableGroups.length === 0 && !pipelineBusy && !pipelineLoadError"
                                      class="player-empty-state">
                                     <p>This CD's audio hasn't been extracted yet.</p>
-                                    <p class="player-empty-hint">Run extraction from Atelier or use the bulk-menu's "Run full workflow" in Library to unpack it.</p>
+                                    <button v-if="pipelineEnabled" class="btn btn-primary player-extract-btn"
+                                            @click="extractFromPlayer" :disabled="playerExtracting">
+                                        {{ playerExtracting ? (playerExtractStatus || 'Extracting…') : '✨ Extract audio' }}
+                                    </button>
+                                    <p class="player-empty-hint">…or run extraction from Atelier / the bulk-menu's "Run full workflow" in Library.</p>
                                 </div>
 
                                 <div v-if="pipelineLoadError" class="maintenance-fail" style="margin-top: 12px;">
@@ -3427,6 +3431,12 @@
                             <input type="checkbox" v-model="metaPreviewFields.cover">
                             <span class="meta-preview-label">Cover</span>
                             <span class="meta-preview-value">{{ (metaPreview.extra || {}).volumes ? 'primary + ' + (metaPreview.extra.volumes.length - 1) + ' volume covers → gallery' : 'download to library' }}</span>
+                        </label>
+                        <label class="meta-preview-field"
+                               v-if="(metaPreview.extra || {}).product_code && selectedItem && selectedItem.kind !== 'tokuten_audio'">
+                            <input type="checkbox" v-model="metaPreviewFields.adopt_code">
+                            <span class="meta-preview-label">Adopt code</span>
+                            <span class="meta-preview-value">{{ metaPreview.extra.product_code }} — becomes a real DLsite entry (full metadata, tags, refreshable)</span>
                         </label>
                         <label class="meta-preview-field"
                                v-if="selectedItem && selectedItem.kind === 'tokuten_audio'">

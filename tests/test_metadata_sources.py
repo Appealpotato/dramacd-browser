@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import metadata_sources
 from metadata_sources.base import empty_metadata, normalize_date
 from metadata_sources.chilchil import ChilChilSource
+from metadata_sources.dlsite import DLsiteSource
 from metadata_sources.gamers import GamersSource
 from metadata_sources.merge import merge_metadata
 from metadata_sources.rejet import RejetSource
@@ -40,13 +41,19 @@ class RegistryTests(unittest.TestCase):
             metadata_sources.match_url("https://rejet.jp/works/?cat=41"),
             RejetSource,
         )
+        self.assertIsInstance(
+            metadata_sources.match_url(
+                "https://www.dlsite.com/girls/work/=/product_id/RJ01465184.html"
+            ),
+            DLsiteSource,
+        )
         self.assertIsNone(metadata_sources.match_url("https://example.com/foo"))
         self.assertIsNone(metadata_sources.match_url(""))
 
     def test_list_sources_shape(self):
         sources = metadata_sources.list_sources()
         names = {s["name"] for s in sources}
-        self.assertEqual(names, {"gamers", "chil_chil", "rejet"})
+        self.assertEqual(names, {"dlsite", "gamers", "chil_chil", "rejet"})
         for s in sources:
             self.assertTrue(s["supports_search"])
             self.assertTrue(s["url_example"])
@@ -208,6 +215,32 @@ def _vol(n: int, cv: str, date: str, desc: str = "shared blurb") -> dict:
     meta["maker"] = "Rejet"
     meta["cover_url"] = f"https://rejet.jp/works/wp-content/uploads/REC-{850 + n}_500.jpg"
     return meta
+
+
+class DLsiteParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = DLsiteSource()
+
+    def test_parse_search_girls(self):
+        hits = self.source.parse_search(fixture("dlsite_search_girls.html"), "girls")
+        self.assertGreaterEqual(len(hits), 20)
+        first = hits[0]
+        self.assertEqual(first["product_code"], "RJ01465185")
+        self.assertIn("耳かき", first["title"])
+        self.assertIn("/work/=/product_id/RJ01465185", first["url"])
+        self.assertTrue(first["thumbnail"].startswith("https://img.dlsite.jp/"))
+        self.assertEqual(first["price"], "880円")
+        self.assertIn("DLsite girls", first["category"])
+        self.assertIn("ボイス・ASMR", first["category"])
+        # codes unique within a page
+        codes = [h["product_code"] for h in hits]
+        self.assertEqual(len(codes), len(set(codes)))
+
+    def test_parse_search_maniax(self):
+        hits = self.source.parse_search(fixture("dlsite_search_maniax.html"), "maniax")
+        self.assertGreaterEqual(len(hits), 10)
+        for h in hits:
+            self.assertRegex(h["product_code"], r"^(RJ|BJ|VJ)\d+")
 
 
 class MergeMetadataTests(unittest.TestCase):
