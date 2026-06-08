@@ -5,6 +5,7 @@ kept in pure `parse_*` methods that take HTML strings so tests can run
 against fixture files without network access."""
 import logging
 import re
+import unicodedata
 
 import httpx
 
@@ -52,6 +53,37 @@ def empty_metadata(source: str, source_url: str) -> dict:
 
 # CV credits inside free text: "CV：名前" / "（CV. 名前）" / "CV.日野 聡"
 CV_RE = re.compile(r"[（(]?\s*(?:CV|ＣＶ|ｃｖ|cv)\s*[.．:：]\s*([^（）()\n<>【】､、/／]+)")
+
+
+def normalize_text(text: str | None) -> str:
+    """Fold text for loose (non-precise) keyword matching: NFKC-unify width
+    (Ａ→A, ｶ→カ), drop all whitespace/punctuation/symbols (so "日野 聡" and
+    "日野聡", "ディア♥ヴォーカリスト" and "ディアヴォーカリスト" collapse to the
+    same form), then casefold for case-insensitive Latin."""
+    if not text:
+        return ""
+    out = []
+    for ch in unicodedata.normalize("NFKC", text):
+        # Z* separators, P* punctuation, S* symbols, C* control -> dropped.
+        if unicodedata.category(ch)[0] in ("Z", "P", "S", "C"):
+            continue
+        out.append(ch)
+    return "".join(out).casefold()
+
+
+def loose_match(query: str, *haystacks: str) -> bool:
+    """True when every whitespace-separated token of `query` appears, in
+    normalized form, somewhere in the combined haystacks. AND across tokens,
+    substring within each — so "クリミナーレ 日野聡" matches a title carrying
+    "クリミナーレ" and a cast field carrying "日野 聡". Empty query -> False."""
+    hay = "".join(normalize_text(h) for h in haystacks if h)
+    if not hay:
+        return False
+    tokens = [normalize_text(tok) for tok in (query or "").split()]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return False
+    return all(tok in hay for tok in tokens)
 
 
 def normalize_date(text: str | None) -> str | None:

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import metadata_sources
 from metadata_sources.animate import AnimateSource
-from metadata_sources.base import empty_metadata, normalize_date
+from metadata_sources.base import empty_metadata, loose_match, normalize_date, normalize_text
 from metadata_sources.booth import BoothSource
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.digiket import DigiketSource
@@ -136,6 +136,36 @@ class NormalizeDateTests(unittest.TestCase):
         self.assertEqual(normalize_date("2008年9月1日"), "2008-09-01")
         self.assertIsNone(normalize_date("発売日未定"))
         self.assertIsNone(normalize_date(None))
+
+
+class LooseMatchTests(unittest.TestCase):
+    def test_normalize_text_folds_space_width_case_symbols(self):
+        # spacing collapses
+        self.assertEqual(normalize_text("日野 聡"), normalize_text("日野聡"))
+        # full-width vs half-width unify, case folds
+        self.assertEqual(normalize_text("ＡＢＣ"), "abc")
+        # symbols/punctuation dropped
+        self.assertEqual(
+            normalize_text("ディア♥ヴォーカリスト"),
+            normalize_text("ディアヴォーカリスト"),
+        )
+        self.assertEqual(normalize_text(None), "")
+
+    def test_loose_match_spacing_and_case(self):
+        title = "カレと48時間を駆け抜けるCD 「クリミナーレ！T」Vol.1 CV.日野 聡"
+        # unspaced cast name matches the spaced one in the haystack
+        self.assertTrue(loose_match("日野聡", title))
+        # multi-token AND across fields
+        self.assertTrue(loose_match("クリミナーレ 日野聡", title))
+        # case/width-insensitive
+        self.assertTrue(loose_match("ｃｄ", title))
+        # a token absent everywhere fails the AND
+        self.assertFalse(loose_match("クリミナーレ 鳥海", title))
+
+    def test_loose_match_empty(self):
+        self.assertFalse(loose_match("", "anything"))
+        self.assertFalse(loose_match("x", ""))
+        self.assertFalse(loose_match("   ", "anything"))
 
 
 class GamersParseTests(unittest.TestCase):
@@ -548,6 +578,44 @@ class RejetParseTests(unittest.TestCase):
         self.assertGreaterEqual(len(works), 5)
         for _, meta in works:
             self.assertTrue(meta["title"])
+
+    def test_local_filter_loose_match(self):
+        """The local catalog filter (used by search()) is space/width/case
+        insensitive — the thing WordPress `?s=` got wrong."""
+        works = self.source.parse_page(
+            fixture("rejet_list.html"), "https://rejet.jp/works/?cat=41"
+        )
+        # unspaced cast name finds works whose cast field is "日野 聡"
+        hits = self.source._filter_works(works, "日野聡")
+        self.assertTrue(hits)
+        self.assertTrue(all(h["source"] == "rejet" for h in hits))
+        self.assertTrue(all("url" in h and h["title"] for h in hits))
+        # series keyword
+        self.assertTrue(self.source._filter_works(works, "クリミナーレ"))
+        # multi-token AND across title + cast
+        self.assertTrue(self.source._filter_works(works, "クリミナーレ 日野聡"))
+        # a token present nowhere yields nothing
+        self.assertEqual(self.source._filter_works(works, "存在しない作品名XYZ"), [])
+
+    def test_alias_expansion(self):
+        # fan-abbreviation rewritten to the official phrase before matching
+        synthetic = [(
+            "k",
+            {
+                "title": "DIABOLIK LOVERS DAYLIGHT Vol.1",
+                "series": "DIABOLIK LOVERS",
+                "seiyuu": [],
+                "description": "",
+                "cover_url": None,
+                "release_date": None,
+                "price": None,
+                "source_url": "https://rejet.jp/works/#rejet=k",
+                "extra": {},
+            },
+        )]
+        self.assertEqual(self.source._expand_aliases("ディアラバ").split(),
+                         ["DIABOLIK", "LOVERS"])
+        self.assertTrue(self.source._filter_works(synthetic, "ディアラバ"))
 
 
 def _vol(n: int, cv: str, date: str, desc: str = "shared blurb") -> dict:
