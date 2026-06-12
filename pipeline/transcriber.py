@@ -50,6 +50,7 @@ class WhisperTranscriber:
         vad_filter: bool = False,
         beam_size: int = 5,
         condition_on_previous_text: bool = True,
+        hotwords: str | None = None,
     ):
         self.model_name = model_name
         self._device, self._compute_type = self._detect_device()
@@ -57,6 +58,11 @@ class WhisperTranscriber:
         self.vad_filter = bool(vad_filter)
         self.beam_size = int(beam_size) if beam_size else 5
         self.condition_on_previous_text = bool(condition_on_previous_text)
+        # Vocabulary bias applied to EVERY decoding window (unlike
+        # initial_prompt, which only seeds the first window — critical since
+        # we run condition_on_previous_text=False). Feeding the CD title fixes
+        # exactly the words Whisper can't guess: 睡眠姦, 孕ませたい, names.
+        self.hotwords = str(hotwords).strip() if hotwords else None
 
     @staticmethod
     def _detect_device() -> tuple[str, str]:
@@ -169,12 +175,14 @@ class WhisperTranscriber:
                 word_timestamps=True,
                 vad_filter=self.vad_filter,
                 condition_on_previous_text=self.condition_on_previous_text,
+                hotwords=self.hotwords,
             )
 
             logger.info(
                 f"[FASTER-WHISPER] Audio duration: {info.duration:.1f}s, language: {info.language} "
                 f"(prob: {info.language_probability:.2f}) | model={self.model_name} "
-                f"beam={self.beam_size} vad={self.vad_filter} condition_prev={self.condition_on_previous_text}"
+                f"beam={self.beam_size} vad={self.vad_filter} condition_prev={self.condition_on_previous_text} "
+                f"hotwords={'yes' if self.hotwords else 'no'}"
             )
 
             # Process segments as they arrive (this is where real-time callbacks happen)

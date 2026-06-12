@@ -152,6 +152,42 @@ class AutoGlossaryTests(unittest.TestCase):
         self.assertEqual(_coerce_glossary_text(None), "")
 
 
+class WhisperHotwordsTests(unittest.TestCase):
+    def test_title_series_and_glossary_ja_sides(self):
+        from pipeline.whisper_job import _build_hotwords
+
+        hw = _build_hotwords(
+            {"title": "ヤンデレお兄ちゃんは睡眠姦で妹を孕ませたい", "series": "甘い毒"},
+            "小霧幸人=Kogiri Yukito\nRomana=Romana\n茶介=Chasuke",
+        )
+        self.assertIn("睡眠姦", hw)
+        self.assertIn("甘い毒", hw)
+        self.assertIn("小霧幸人", hw)
+        self.assertIn("茶介", hw)
+        # ASCII-only glossary left sides are useless to Whisper.
+        self.assertNotIn("Romana", hw)
+
+    def test_empty_item_returns_none(self):
+        from pipeline.whisper_job import _build_hotwords
+
+        self.assertIsNone(_build_hotwords({}, ""))
+        self.assertIsNone(_build_hotwords({"title": "   "}, "ascii=only"))
+        # An English title is still included — harmless context for Whisper.
+        self.assertEqual(_build_hotwords({"title": "English Title"}, "a=b"), "English Title")
+
+    def test_capped_length(self):
+        from pipeline.whisper_job import _build_hotwords, _HOTWORDS_MAX_CHARS
+
+        hw = _build_hotwords({"title": "あ" * 1000}, "")
+        self.assertLessEqual(len(hw), _HOTWORDS_MAX_CHARS)
+
+    def test_dedupes(self):
+        from pipeline.whisper_job import _build_hotwords
+
+        hw = _build_hotwords({"title": "甘い毒", "series": "甘い毒"}, "甘い毒=Sweet Poison")
+        self.assertEqual(hw, "甘い毒")
+
+
 class ChunkAutoSizingTests(unittest.TestCase):
     """queue_translation must store None (= auto) when no explicit chunk
     sizes are given, so translation_job can size per provider."""

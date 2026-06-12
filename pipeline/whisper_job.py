@@ -6,6 +6,36 @@ from pathlib import Path
 import database as db
 from pipeline.transcriber import WhisperTranscriber
 
+# hotwords are resent with every ~30s decoding window — keep the bias text
+# short so it doesn't crowd out the window's own prompt budget.
+_HOTWORDS_MAX_CHARS = 300
+
+
+def _build_hotwords(item: dict, glossary: str = "") -> str | None:
+    """Vocabulary bias for Whisper: the item's JP title/series plus the
+    Japanese side of its glossary rules (character name readings). Returns
+    None when the item has nothing useful (e.g. English-only metadata)."""
+    parts: list[str] = []
+    for key in ("title", "series"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    for line in str(glossary or "").splitlines():
+        ja = line.split("=", 1)[0].strip()
+        # ASCII-only left sides are romaji/English rules — useless to Whisper.
+        if ja and not ja.isascii():
+            parts.append(ja)
+    seen: set[str] = set()
+    unique: list[str] = []
+    for part in parts:
+        key = part.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(part)
+    text = "、".join(unique).strip()
+    return text[:_HOTWORDS_MAX_CHARS] or None
+
 
 async def run_transcription_job(job_id: int):
     """
@@ -94,12 +124,22 @@ async def run_transcription_job(job_id: int):
             current_track_progress["value"] = progress_percent
             logger.debug(f"[PROGRESS CALLBACK] Updated to {progress_percent}%")
 
+        # Bias decoding toward vocabulary Whisper can't guess: the CD's own
+        # title/series (ero compounds like 睡眠姦 are usually IN the title)
+        # plus the JP side of the item's glossary (character name readings).
+        try:
+            item_glossary = await db.get_item_glossary(item_id) or ""
+        except Exception:
+            item_glossary = ""
+        hotwords = _build_hotwords(item, item_glossary)
+
         transcriber = WhisperTranscriber(
             model_name=model_name,
             progress_callback=on_whisper_progress,
             vad_filter=vad_filter,
             beam_size=beam_size,
             condition_on_previous_text=condition_on_previous,
+            hotwords=hotwords,
         )
         device = transcriber.get_device()
         await db.append_job_event(
@@ -112,6 +152,7 @@ async def run_transcription_job(job_id: int):
                 "vad_filter": vad_filter,
                 "beam_size": beam_size,
                 "condition_on_previous_text": condition_on_previous,
+                "hotwords": hotwords or None,
             },
         )
     except Exception as e:
