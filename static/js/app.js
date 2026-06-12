@@ -823,6 +823,10 @@ const app = createApp({
         const transcriptionInProgress = ref(false);
         const transcriptionStatus = ref(null);
         const transcriptionProgress = ref(null);
+        // Which item the running transcription job belongs to — the progress
+        // panel only renders for that CD (switching to another CD hides it
+        // instead of showing stale progress; switching back restores it).
+        const transcriptionItemId = ref(null);
         const selectedTracksForTranscription = ref([]);
         const trackCodecFilter = ref('all'); // 'all', 'mp3', 'wav', 'other'
         const autoTranslateTargetLanguage = ref('en');
@@ -6779,6 +6783,7 @@ const app = createApp({
 
             transcriptionInProgress.value = true;
             transcriptionStatus.value = null;
+            transcriptionItemId.value = Number(pipelineSelectedItemId.value);
             // Initialize progress bar to show immediately (before first poll)
             transcriptionProgress.value = { total: selectedTracksForTranscription.value.length, completed: 0, current: 'Initializing...' };
             pipelineLoadError.value = '';
@@ -6811,6 +6816,7 @@ const app = createApp({
         async function pollTranscriptionProgress(jobId) {
             const maxPolls = 1200; // 10 minutes max with 300ms interval
             let pollCount = 0;
+            let lastRefreshedCompleted = 0;
             // Clear any existing interval first to avoid duplicate polling
             if (transcriptionPollInterval) {
                 clearInterval(transcriptionPollInterval);
@@ -6831,6 +6837,12 @@ const app = createApp({
                     const job = jobs.find(j => j.id === jobId);
                     if (!job) return;
 
+                    // Only paint progress while the user is looking at the CD
+                    // this job belongs to — on another CD the panel is hidden
+                    // (the item-switch watcher cleared it) and stays hidden.
+                    // Switching back repopulates it on the next tick.
+                    const onOwningItem = Number(pipelineSelectedItemId.value) === transcriptionItemId.value;
+
                     // Update progress - backend now updates more frequently with status descriptions
                     const newProgress = {
                         total: job.total || 0,
@@ -6839,23 +6851,36 @@ const app = createApp({
                     };
 
                     // Only update if something changed to reduce DOM updates
-                    if (!transcriptionProgress.value ||
+                    if (onOwningItem && (!transcriptionProgress.value ||
                         transcriptionProgress.value.completed !== newProgress.completed ||
-                        transcriptionProgress.value.current !== newProgress.current) {
+                        transcriptionProgress.value.current !== newProgress.current)) {
                         transcriptionProgress.value = newProgress;
                     }
 
-                    transcriptionStatus.value = { status: job.status, job_id: jobId };
+                    if (onOwningItem) {
+                        transcriptionStatus.value = { status: job.status, job_id: jobId };
+                    }
+
+                    // A track just finished — soft-refresh the list so its 📝
+                    // badge and run counts appear immediately, not only when
+                    // the whole job ends.
+                    const completedNow = Number(job.completed || 0);
+                    if (completedNow > lastRefreshedCompleted) {
+                        lastRefreshedCompleted = completedNow;
+                        await refreshPipelineTrackList();
+                    }
 
                     if (job.status === 'completed' || job.status === 'failed') {
                         clearInterval(transcriptionPollInterval);
                         transcriptionInProgress.value = false;
                         // Final update with visual indicator
-                        transcriptionProgress.value = {
-                            total: job.total || 0,
-                            completed: job.completed || 0,
-                            current: job.status === 'completed' ? '✓ Complete' : '✗ Failed'
-                        };
+                        if (onOwningItem) {
+                            transcriptionProgress.value = {
+                                total: job.total || 0,
+                                completed: job.completed || 0,
+                                current: job.status === 'completed' ? '✓ Complete' : '✗ Failed'
+                            };
+                        }
                         await refreshPipelineTrackList();
                         if (job.status === 'completed') {
                             pipelineActiveSummary.value = `✓ Transcription complete: ${job.completed || 0} / ${job.total || 0} tracks`;
@@ -6868,6 +6893,17 @@ const app = createApp({
                 }
             }, 300);  // Poll every 300ms for smoother real-time updates
         }
+
+        // Switching to a different CD hides the (now-unrelated) transcription
+        // progress panel instead of leaving the previous CD's progress on
+        // screen. The job keeps running and keeps being polled; coming back
+        // to its CD brings the panel back.
+        watch(pipelineSelectedItemId, (newId) => {
+            if (transcriptionItemId.value && Number(newId) !== transcriptionItemId.value) {
+                transcriptionStatus.value = null;
+                transcriptionProgress.value = null;
+            }
+        });
 
         function getTranscriptionProgressPercent() {
             if (!transcriptionProgress.value || !transcriptionProgress.value.current) return 0;
