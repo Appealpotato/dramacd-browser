@@ -17,6 +17,7 @@ from .gamers import GamersSource
 from .gyutto import GyuttoSource
 from .hvdb import HvdbSource
 from .melon import MelonbooksSource
+from .pokedora import PokedoraSource
 from .rejet import RejetSource
 from .stellaworth import StellaworthSource
 from .wayback import WaybackDLsiteSource
@@ -40,6 +41,7 @@ SOURCES: list[MetadataSource] = [
     ChilChilSource(),
     RejetSource(),
     HvdbSource(),
+    PokedoraSource(),
 ]
 
 _BY_NAME = {s.name: s for s in SOURCES}

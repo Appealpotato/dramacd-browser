@@ -52,7 +52,7 @@ async def list_items(
     listen_status: Optional[str] = Query(None, pattern="^(backlog|want_to_listen|listening|completed|on_hold|dropped|wishlist)$"),
     listen_statuses: Optional[List[str]] = Query(None),
     tokuten_kind: Optional[str] = Query(None, pattern="^(audio|book|image|misc)$"),
-    tokuten_source: Optional[str] = Query(None, pattern="^(dlsite|booth|melon|animate|stellaworth|gamers|chil_chil|vgmdb|rejet|fanza|toranoana|digiket|gyutto|hvdb|physical|other)$"),
+    tokuten_source: Optional[str] = Query(None, pattern="^(dlsite|booth|melon|animate|stellaworth|gamers|chil_chil|vgmdb|rejet|fanza|toranoana|digiket|gyutto|hvdb|pokedora|physical|other)$"),
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ):

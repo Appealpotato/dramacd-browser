@@ -1961,8 +1961,24 @@ select, .filter-select {
 }
 
 @media (max-width: 1080px) {
+    /* Stacked single-column (tablet/phone): abandon the desktop two-column
+       fixed-height grid and let the whole page scroll as one document. Without
+       this the sidebar keeps its desktop full-viewport height (calc(100vh-30px))
+       while stacked on top, shoving the library/player content a whole screen
+       down — you scroll past an empty sidebar before reaching your cards/tracks,
+       with a big gap before the tab bar. Here the sidebar sizes to its content
+       and the body scrolls normally. */
+    html, body, #app { height: auto; min-height: 100%; }
     .workspace {
+        display: block;
         grid-template-columns: 1fr;
+        height: auto;
+        min-height: 0;
+    }
+    .control-column {
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: visible !important;
     }
 
     .control-grid {

@@ -2820,7 +2820,7 @@ const app = createApp({
             booth: 'BOOTH', animate: 'animate', stellaworth: 'Stellaworth',
             fanza: 'FANZA Doujin', melon: 'Melonbooks',
             digiket: 'DiGiket', gyutto: 'Gyutto', hvdb: 'HVDB',
-            wayback: 'Wayback DLsite',
+            wayback: 'Wayback DLsite', pokedora: 'Pokedora',
         };
         function metaSourceLabel(name) {
             return META_SOURCE_LABELS[name] || name || '?';

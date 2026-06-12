@@ -19,6 +19,7 @@ from metadata_sources.gyutto import GyuttoSource
 from metadata_sources.hvdb import HvdbSource
 from metadata_sources.melon import MelonbooksSource
 from metadata_sources.merge import merge_metadata
+from metadata_sources.pokedora import PokedoraSource
 from metadata_sources.rejet import RejetSource
 from metadata_sources.stellaworth import StellaworthSource
 from metadata_sources.wayback import WaybackDLsiteSource
@@ -118,15 +119,16 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
-            "digiket", "gyutto", "hvdb", "wayback",
+            "digiket", "gyutto", "hvdb", "wayback", "pokedora",
         })
         for s in sources:
             self.assertIsInstance(s["supports_search"], bool)
             self.assertTrue(s["url_example"])
         searchable = {s["name"] for s in sources if s["supports_search"]}
         # fanza is URL-paste only (search shape unverifiable behind the WAF);
-        # wayback is paste-a-snapshot-URL only by nature
-        self.assertEqual(names - searchable, {"fanza", "wayback"})
+        # wayback is paste-a-snapshot-URL only by nature; pokedora is paste-only
+        # for now (search not yet wired).
+        self.assertEqual(names - searchable, {"fanza", "wayback", "pokedora"})
 
 
 class NormalizeDateTests(unittest.TestCase):
@@ -197,6 +199,34 @@ class GamersParseTests(unittest.TestCase):
         self.assertTrue(first["thumbnail"])
         self.assertRegex(first["release_date"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertIn("円", first["price"])
+
+
+class PokedoraParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = PokedoraSource()
+
+    def test_match_url(self):
+        self.assertTrue(self.source.matches_url(
+            "https://pokedora.com/products/detail.php?product_id=85510&age_check=1"
+        ))
+        self.assertTrue(self.source.matches_url(
+            "https://pokedora.com/products/detail.php?product_id=85510"
+        ))
+        self.assertFalse(self.source.matches_url("https://www.dlsite.com/foo"))
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("pokedora_product.html"),
+            "https://pokedora.com/products/detail.php?product_id=85510",
+        )
+        self.assertEqual(meta["source"], "pokedora")
+        # Title: first "|" segment with the trailing 【出演声優…】 bracket stripped.
+        self.assertEqual(meta["title"], "ファム・ファタール Vol.3 冬の狗")
+        self.assertEqual(meta["seiyuu"], ["湯町駆", "茶介"])
+        self.assertEqual(meta["series"], "ファム・ファタール")
+        self.assertEqual(meta["maker"], "Tunaboni Collections")
+        self.assertIn("get_image.php", meta["cover_url"])
+        self.assertIn("特典付きドラマCD", meta["extra"]["tags"])
 
 
 class BoothParseTests(unittest.TestCase):
