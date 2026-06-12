@@ -8394,7 +8394,7 @@ const app = createApp({
             //   path. Default — matches the common "I want to re-import"
             //   workflow.
             //   ignoreCode=true  → also adds the product_code to ignored_codes
-            //   so scans skip it. Use for "yeet permanently".
+            //   so scans skip it. Use for "delete and ignore".
             if (!selectedItem.value) return;
             const code = selectedItem.value.product_code;
             const msg = ignoreCode

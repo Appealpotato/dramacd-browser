@@ -3355,7 +3355,7 @@
                     <div class="detail-section">
                         <h3>Library Cleanup</h3>
                         <p style="font-size:12px; color:var(--text-muted); margin-bottom:8px">
-                            "Delete entry" just removes the DB row — the file on disk is untouched and a future scan will pick it up again.<span v-if="isDlsiteCode(selectedItem.product_code)"> "Yeet permanently" also adds the code to the ignore list so scans skip it forever.</span>
+                            "Delete entry" just removes the DB row — the file on disk is untouched and a future scan will pick it up again.<span v-if="isDlsiteCode(selectedItem.product_code)"> "Delete and ignore" also adds the code to the ignore list so scans skip it forever.</span>
                         </p>
                         <div style="display:flex; gap:6px; flex-wrap:wrap;">
                             <button class="btn btn-secondary"
@@ -3367,7 +3367,7 @@
                                     class="btn btn-secondary"
                                     @click="deleteItem(true)"
                                     :disabled="deleteLoading">
-                                Yeet permanently
+                                Delete and ignore
                             </button>
                         </div>
                         <div v-if="deleteError" style="color:var(--accent); font-size:12px; margin-top:6px">{{ deleteError }}</div>
@@ -4255,7 +4255,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=152"></script>
+    <script src="/static/js/app.js?v=153"></script>
 </body>
 </html>
 
