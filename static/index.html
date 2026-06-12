@@ -2341,9 +2341,12 @@
                                     <select v-model="apiOpenAiCompatRequestFormat" @change="saveApiSettings('save')">
                                         <option value="openai">OpenAI Chat Completions (POST {base}/chat/completions)</option>
                                         <option value="anthropic">Anthropic Messages (POST {base}/messages, x-api-key)</option>
+                                        <option value="ollama">Ollama native (POST {base}/api/chat, thinking off, no key)</option>
                                     </select>
                                     <span class="pipeline-note">
                                         Pick "Anthropic Messages" for Claude proxies (matches SillyTavern's Claude reverse-proxy setup).
+                                        Pick "Ollama native" for a local/LAN Ollama server (e.g. <code>http://192.168.x.x:11434</code>) —
+                                        disables thinking on Qwen3/DeepSeek-style models and needs no API key.
                                     </span>
                                 </div>
                                 <div class="pipeline-controls">
@@ -4255,7 +4258,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=157"></script>
+    <script src="/static/js/app.js?v=158"></script>
 </body>
 </html>
 

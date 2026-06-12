@@ -286,7 +286,14 @@ async def run_transcription_job(job_id: int):
                     summary_model = await db.get_runtime_gemini_model()
                     summary_provider = "gemini"
 
-                if summary_api_key:
+                # Ollama-format endpoints are local and unauthenticated, so a
+                # missing key doesn't mean "unconfigured" in that mode.
+                summary_configured = bool(summary_api_key) or (
+                    summary_provider == "openai_compat"
+                    and summary_request_format == "ollama"
+                    and bool(summary_base_url)
+                )
+                if summary_configured:
                     # Get item for drama description context
                     item = await db.get_item(item_id)
                     drama_description = str(item.get("description_en") or item.get("description") or "") if item else ""

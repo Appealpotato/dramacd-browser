@@ -230,6 +230,15 @@ class TrackSummarizer:
         if not self.base_url:
             raise RuntimeError("openai_compat summarizer needs a base URL")
 
+        if self.request_format == "ollama":
+            from pipeline.ollama_translator import ollama_chat
+            return await ollama_chat(
+                self.base_url,
+                self.model,
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+
         if self.request_format == "anthropic":
             from pipeline.anthropic_compat_translator import (
                 _normalize_messages_url,

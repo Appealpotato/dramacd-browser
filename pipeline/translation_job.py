@@ -215,6 +215,7 @@ async def _run_translation_job_inner(job_id: int):
     target_language = str(metadata.get("target_language") or "en").strip() or "en"
     provider = str(metadata.get("provider") or "gemini").strip().lower()
     runtime_base_url: str | None = None
+    runtime_request_format = "openai"
     if provider == "openrouter":
         runtime_model = await db.get_runtime_openrouter_model()
         runtime_api_key = await db.get_runtime_openrouter_api_key()
@@ -241,7 +242,9 @@ async def _run_translation_job_inner(job_id: int):
     if provider not in db.SUPPORTED_TRANSLATION_PROVIDERS:
         await db.update_job(job_id, status="failed", error=f"Unsupported provider: {provider}")
         return
-    if not runtime_api_key:
+    # Ollama-format endpoints are local and unauthenticated — no key needed.
+    _key_optional = provider == "openai_compat" and runtime_request_format == "ollama"
+    if not runtime_api_key and not _key_optional:
         missing_key_name = "DRAMACD_GEMINI_API_KEY"
         if provider == "openrouter":
             missing_key_name = "DRAMACD_OPENROUTER_API_KEY"
@@ -334,6 +337,13 @@ async def _run_translation_job_inner(job_id: int):
                 api_key=runtime_api_key,
                 model=model,
                 base_url=runtime_base_url,
+            )
+        elif runtime_request_format == "ollama":
+            from pipeline.ollama_translator import OllamaTrackTranslator
+            translator = OllamaTrackTranslator(
+                model=model,
+                base_url=runtime_base_url,
+                api_key=runtime_api_key or "",
             )
         else:
             translator = OpenRouterTrackTranslator(

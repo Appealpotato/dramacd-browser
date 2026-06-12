@@ -5850,7 +5850,7 @@ const app = createApp({
                 if (compatBaseUrl) payload.openai_compat_base_url = compatBaseUrl;
                 if (compatModel) payload.openai_compat_model = compatModel;
                 if (compatKey) payload.openai_compat_api_key = compatKey;
-                if (['openai', 'anthropic'].includes(compatFormat)) payload.openai_compat_request_format = compatFormat;
+                if (['openai', 'anthropic', 'ollama'].includes(compatFormat)) payload.openai_compat_request_format = compatFormat;
                 if (action === 'clear_gemini') payload.clear_gemini_api_key = true;
                 if (action === 'clear_openrouter') payload.clear_openrouter_api_key = true;
                 if (action === 'clear_chutes') payload.clear_chutes_api_key = true;

@@ -1957,19 +1957,24 @@ async def clear_runtime_openai_compat_base_url() -> bool:
     return await delete_app_setting(RUNTIME_OPENAI_COMPAT_BASE_URL_SETTING)
 
 
+OPENAI_COMPAT_REQUEST_FORMATS = {"openai", "anthropic", "ollama"}
+
+
 async def get_runtime_openai_compat_request_format() -> str:
-    """'openai' (default) or 'anthropic' for proxies that expect /messages."""
+    """'openai' (default), 'anthropic' for proxies that expect /messages, or
+    'ollama' for a local Ollama server's native /api/chat (thinking disabled,
+    no API key)."""
     value = await get_app_setting(RUNTIME_OPENAI_COMPAT_REQUEST_FORMAT_SETTING)
     fmt = str(value or "openai").strip().lower()
-    if fmt not in {"openai", "anthropic"}:
+    if fmt not in OPENAI_COMPAT_REQUEST_FORMATS:
         return "openai"
     return fmt
 
 
 async def set_runtime_openai_compat_request_format(fmt: str) -> str:
     clean = str(fmt or "").strip().lower()
-    if clean not in {"openai", "anthropic"}:
-        raise ValueError("Request format must be 'openai' or 'anthropic'")
+    if clean not in OPENAI_COMPAT_REQUEST_FORMATS:
+        raise ValueError("Request format must be 'openai', 'anthropic' or 'ollama'")
     await set_app_setting(RUNTIME_OPENAI_COMPAT_REQUEST_FORMAT_SETTING, clean)
     return clean
 

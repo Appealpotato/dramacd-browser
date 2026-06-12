@@ -795,7 +795,8 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
     model = await db.get_runtime_openai_compat_model()
     base_url = await db.get_runtime_openai_compat_base_url()
     request_format = await db.get_runtime_openai_compat_request_format()
-    if not api_key:
+    # A local Ollama server is unauthenticated — no key needed in that mode.
+    if not api_key and request_format != "ollama":
         raise HTTPException(status_code=400, detail="Missing OpenAI-compatible API key")
     if not base_url:
         raise HTTPException(status_code=400, detail="Missing OpenAI-compatible base URL")
@@ -814,6 +815,15 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
     )
 
     async def _ask(prompt_text: str) -> str:
+        if request_format == "ollama":
+            from pipeline.ollama_translator import ollama_chat
+            try:
+                return await ollama_chat(
+                    base_url, model, [{"role": "user", "content": prompt_text}]
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)[:400])
+
         if request_format == "anthropic":
             from pipeline.anthropic_compat_translator import (
                 _normalize_messages_url,
@@ -932,7 +942,27 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             raise HTTPException(status_code=502, detail="OpenAI-compatible returned empty content")
         return content
 
-    content = await _ask(prompt)
+    async def _ask_safe(prompt_text: str) -> str:
+        # Network failures surface as a clean error instead of a raw 500 —
+        # a slow local model hitting the timeout was an unhandled ReadTimeout.
+        try:
+            return await _ask(prompt_text)
+        except httpx.TimeoutException as exc:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"OpenAI-compatible endpoint timed out ({type(exc).__name__}). "
+                    "Local/thinking models can exceed the cloud timeout — for an "
+                    "Ollama server, switch the request format to 'ollama'."
+                ),
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"OpenAI-compatible endpoint unreachable: {type(exc).__name__}: {str(exc)[:200]}",
+            )
+
+    content = await _ask_safe(prompt)
     try:
         parsed_raw = _parse_json_payload(content)
     except Exception as first_exc:
@@ -948,7 +978,7 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             "No markdown, no code blocks, no commentary—just pure JSON."
         )
         try:
-            content = await _ask(repair_prompt)
+            content = await _ask_safe(repair_prompt)
             parsed_raw = _parse_json_payload(content)
         except HTTPException:
             raise
@@ -982,8 +1012,13 @@ async def _provider_has_key(provider: str) -> bool:
     if chosen == "chutes":
         return bool(await db.get_runtime_chutes_api_key())
     if chosen == "openai_compat":
+        has_key = bool(await db.get_runtime_openai_compat_api_key())
+        if not has_key:
+            # Local Ollama servers are unauthenticated — base URL + model is
+            # a complete configuration in that mode.
+            has_key = await db.get_runtime_openai_compat_request_format() == "ollama"
         return bool(
-            await db.get_runtime_openai_compat_api_key()
+            has_key
             and await db.get_runtime_openai_compat_base_url()
             and await db.get_runtime_openai_compat_model()
         )
@@ -1025,8 +1060,20 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
         model = await db.get_runtime_openai_compat_model()
         base_url = await db.get_runtime_openai_compat_base_url()
         request_format = await db.get_runtime_openai_compat_request_format()
-        if not (api_key and base_url and model):
+        if not (base_url and model) or (not api_key and request_format != "ollama"):
             raise HTTPException(status_code=400, detail="OpenAI-compatible provider not fully configured")
+
+        if request_format == "ollama":
+            from pipeline.ollama_translator import ollama_chat
+            try:
+                text = await ollama_chat(base_url, model, [{"role": "user", "content": prompt}])
+            except RuntimeError as exc:
+                raise HTTPException(status_code=502, detail=str(exc)[:400])
+            except httpx.TimeoutException:
+                raise HTTPException(status_code=504, detail="Ollama endpoint timed out")
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail=f"Ollama endpoint unreachable: {type(exc).__name__}")
+            return text, provider
 
         if request_format == "anthropic":
             from pipeline.anthropic_compat_translator import (
@@ -1351,8 +1398,11 @@ async def update_ai_settings(request: AiSettingsUpdateRequest, _auth=Depends(req
 
     if request.openai_compat_request_format is not None:
         clean_fmt = str(request.openai_compat_request_format).strip().lower()
-        if clean_fmt not in {"openai", "anthropic"}:
-            raise HTTPException(status_code=400, detail="openai_compat_request_format must be 'openai' or 'anthropic'")
+        if clean_fmt not in db.OPENAI_COMPAT_REQUEST_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail="openai_compat_request_format must be 'openai', 'anthropic' or 'ollama'",
+            )
         await db.set_runtime_openai_compat_request_format(clean_fmt)
         updated_fields.append("openai_compat_request_format")
 
