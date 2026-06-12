@@ -3,10 +3,11 @@ Autopilot orchestrator: chains the full per-item pipeline in order.
 
 Stages, in order:
   1. Translate metadata (JA -> EN title/description/seiyuu)
-  2. Extract archives
-  3. Translate track titles
-  4. Transcribe all tracks needing transcription
-  5. Auto-translate every track that has an active transcript
+  2. Build glossary + character memory from metadata (LLM, best-effort)
+  3. Extract archives
+  4. Translate track titles
+  5. Transcribe all tracks needing transcription
+  6. Auto-translate every track that has an active transcript
 
 Each stage logs its own progress events on the autopilot job. Sub-jobs
 (extract / transcribe / per-track translate) keep their own job rows
@@ -33,6 +34,7 @@ _autopilot_semaphore = asyncio.Semaphore(MAX_CONCURRENT_AUTOPILOTS)
 # and every job_event message. UI never has to translate these.
 STAGE_LABELS: dict[str, str] = {
     "metadata_translate": "Translating metadata",
+    "glossary_build": "Building glossary",
     "extract": "Unpacking audio",
     "track_titles_translate": "Translating track titles",
     "transcribe": "Transcribing",
@@ -127,6 +129,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
     glossary = metadata.get("glossary") or None
     character_memory = metadata.get("character_memory") or None
     review_pass = bool(metadata.get("review_pass", False))
+    glossary_feedback = bool(metadata.get("glossary_feedback", True))
 
     await db.update_job(
         job_id,
@@ -197,6 +200,72 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         return
 
     # ---------------------------------------------------------------- stage 2
+    # Auto-build the item glossary + character memory from metadata BEFORE
+    # transcription, so Whisper's hotwords pick up the mined names and every
+    # track translation starts with the full rule set (translation_job reads
+    # both from the item row). Best-effort: a failure never aborts the run.
+    stage = "glossary_build"
+    label = stage_label(stage)
+    if stage in skip:
+        await db.append_job_event(job_id, "info", f"{label} — skipped", {})
+        _record_stage(stage, status="skipped")
+    else:
+        item_now = await db.get_item(item_id) or {}
+        already_built = bool(
+            str(item_now.get("glossary") or "").strip()
+            and str(item_now.get("character_memory") or "").strip()
+        )
+        if already_built and not metadata.get("force_glossary", False):
+            _record_stage(stage, status="skipped", reason="already_built")
+            await db.append_job_event(job_id, "info", f"{label} — skipped (already built)", {})
+        else:
+            await db.update_job(job_id, current=label)
+            glossary_added = 0
+            char_mem_added = 0
+            stage_errors: list[str] = []
+            try:
+                from routers.api import build_item_auto_glossary  # lazy: avoid import cycle
+                g_result = await build_item_auto_glossary(item_id)
+                glossary_added = int(g_result.get("added_lines") or 0)
+            except Exception as e:
+                detail = str(getattr(e, "detail", None) or e)[:300]
+                stage_errors.append(f"glossary: {detail}")
+            try:
+                from routers.api import build_item_auto_character_memory  # lazy
+                c_result = await build_item_auto_character_memory(item_id)
+                char_mem_added = int(c_result.get("added_lines") or 0)
+            except Exception as e:
+                detail = str(getattr(e, "detail", None) or e)[:300]
+                stage_errors.append(f"character memory: {detail}")
+            if stage_errors and not (glossary_added or char_mem_added):
+                _record_stage(stage, status="warn", error="; ".join(stage_errors)[:300])
+                await db.append_job_event(job_id, "warn", f"{label} — failed", {"errors": stage_errors})
+            else:
+                _record_stage(
+                    stage,
+                    status="ok",
+                    glossary_added=glossary_added,
+                    character_memory_added=char_mem_added,
+                    **({"partial_errors": stage_errors} if stage_errors else {}),
+                )
+                await db.append_job_event(
+                    job_id,
+                    "info",
+                    f"{label} — done",
+                    {
+                        "glossary_added": glossary_added,
+                        "character_memory_added": char_mem_added,
+                        **({"errors": stage_errors} if stage_errors else {}),
+                    },
+                )
+    completed += 1
+    await db.update_job(job_id, completed=completed)
+    if await _stop_requested(job_id):
+        await _finalize(job_id, "stopped", completed, result=summary)
+        await db.append_job_event(job_id, "info", "Workflow stopped", {})
+        return
+
+    # ---------------------------------------------------------------- stage 3
     stage = "extract"
     label = stage_label(stage)
     if stage in skip:
@@ -240,7 +309,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         await db.append_job_event(job_id, "info", "Workflow stopped", {})
         return
 
-    # ---------------------------------------------------------------- stage 3
+    # ---------------------------------------------------------------- stage 4
     stage = "track_titles_translate"
     label = stage_label(stage)
     if stage in skip:
@@ -286,7 +355,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         await db.append_job_event(job_id, "info", "Workflow stopped", {})
         return
 
-    # ---------------------------------------------------------------- stages 4 + 5
+    # ---------------------------------------------------------------- stages 5 + 6
     # Transcribe and translate are now overlapped per-track: as soon as a
     # track has an active transcript, its translation is queued. The two
     # nominal stages still appear in the UI ("Transcribing", "Translating")
@@ -416,6 +485,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
                 glossary=glossary,
                 character_memory=character_memory,
                 review_pass=review_pass,
+                glossary_feedback=glossary_feedback,
             )
             await run_translation_job(ltj)
             sub = await db.get_job(ltj) or {}
@@ -521,7 +591,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         except Exception:
             pass  # status check below picks up the failure
 
-    # ---- Resolve transcription outcome and emit stage 4 record ----
+    # ---- Resolve transcription outcome and emit stage 5 record ----
     if do_transcribe and tjob_id is not None:
         # transcribe_task may have ended naturally above; raise its exception if any
         if transcribe_task is not None and transcribe_task.done():
@@ -584,7 +654,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         await db.append_job_event(job_id, "info", "Workflow stopped", {})
         return
 
-    # ---- Stage 5 record (translation results captured during the loop above) ----
+    # ---- Stage 6 record (translation results captured during the loop above) ----
     if do_translate:
         _record_stage(
             translate_stage,

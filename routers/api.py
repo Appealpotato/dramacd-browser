@@ -2012,11 +2012,12 @@ def _coerce_glossary_text(parsed) -> str:
     return str(parsed or "").strip()
 
 
-@router.post("/items/{item_id}/glossary/auto")
-async def auto_build_item_glossary(item_id: int, _auth=Depends(require_api_key)):
+async def build_item_auto_glossary(item_id: int) -> dict:
     """Mine the item's metadata for glossary rules (name readings, recurring
     terms) with one LLM call and MERGE them into the per-item glossary —
-    existing user rules always survive and take precedence (they come first)."""
+    existing user rules always survive and take precedence (they come first).
+    Reusable core shared by the endpoint and the autopilot glossary stage;
+    raises HTTPException on failure."""
     item = await db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -2042,6 +2043,124 @@ async def auto_build_item_glossary(item_id: int, _auth=Depends(require_api_key))
         "added_lines": len(added),
         "provider": provider,
     }
+
+
+@router.post("/items/{item_id}/glossary/auto")
+async def auto_build_item_glossary(item_id: int, _auth=Depends(require_api_key)):
+    return await build_item_auto_glossary(item_id)
+
+
+@router.get("/items/{item_id}/character-memory")
+async def get_item_character_memory_endpoint(item_id: int):
+    """Read the per-item character memory. Public read so the Workshop can
+    load it without prompting for the API key."""
+    character_memory = await db.get_item_character_memory(item_id)
+    if character_memory is None:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id, "character_memory": character_memory}
+
+
+@router.put("/items/{item_id}/character-memory")
+async def set_item_character_memory_endpoint(item_id: int, payload: dict, _auth=Depends(require_api_key)):
+    """Write the per-item character memory. Accepts ``{"character_memory": "..."}``.
+    Empty string clears it."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be an object")
+    character_memory = payload.get("character_memory", "")
+    if character_memory is None:
+        character_memory = ""
+    if not isinstance(character_memory, str):
+        raise HTTPException(status_code=400, detail="character_memory must be a string")
+    ok = await db.set_item_character_memory(item_id, character_memory)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"item_id": item_id, "character_memory": character_memory}
+
+
+def _build_auto_character_memory_prompt(item: dict) -> str:
+    """One-shot prompt that mines an item's metadata for character notes —
+    who speaks, how they speak, and their relationship to the listener. This
+    feeds the translation prompt so tone/formality stay consistent across
+    tracks."""
+
+    def _json_list(value) -> list:
+        try:
+            parsed = json.loads(value or "[]")
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    seiyuu = _json_list(item.get("seiyuu"))
+    tags = _json_list(item.get("tags"))
+    return (
+        "Write character memory notes for translating a Japanese drama CD, from its metadata below.\n"
+        "Describe ONLY what the metadata implies:\n"
+        "• Each speaking character: name (romaji if determinable), role, personality,\n"
+        "  speech style (rough/polite/teasing/formal), and relationship to the listener.\n"
+        "• The listener's role if the description implies one (most drama CDs address\n"
+        "  the listener directly as 'you').\n"
+        "• Overall tone of the work (sweet, dark, comedic, etc.).\n"
+        "Keep it to 3-6 short lines. Do NOT invent characters, names, or facts not\n"
+        "implied by the metadata. If the metadata implies nothing useful, return empty.\n\n"
+        "Respond ONLY with valid JSON: {\"character_memory\": \"line1\\nline2\"} — use \\n between lines.\n"
+        "If nothing qualifies, return {\"character_memory\": \"\"}.\n\n"
+        f"title: {str(item.get('title') or '')}\n"
+        f"title_en: {str(item.get('title_en') or '')}\n"
+        f"series: {str(item.get('series') or '')}\n"
+        f"circle: {str(item.get('circle') or '')}\n"
+        f"seiyuu: {json.dumps(seiyuu, ensure_ascii=False)}\n"
+        f"tags: {json.dumps(tags[:20], ensure_ascii=False)}\n"
+        f"description: {str(item.get('description') or '')[:4000]}\n"
+        f"description_en: {str(item.get('description_en') or '')[:4000]}"
+    )
+
+
+def _coerce_character_memory_text(parsed) -> str:
+    """Accept {"character_memory": "..."}, {"character_memory": [...]}, or a
+    bare list/string and normalize to newline-separated lines."""
+    if isinstance(parsed, dict):
+        parsed = parsed.get("character_memory", "")
+    if isinstance(parsed, list):
+        parsed = "\n".join(str(x or "").strip() for x in parsed)
+    return str(parsed or "").strip()
+
+
+async def build_item_auto_character_memory(item_id: int) -> dict:
+    """Mine the item's metadata for character notes with one LLM call and
+    MERGE new lines into the per-item character memory — existing user notes
+    always survive and come first (merge_glossaries is line-based and generic).
+    Reusable core shared by the endpoint and the autopilot glossary stage;
+    raises HTTPException on failure."""
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not any(str(item.get(k) or "").strip() for k in ("title", "description", "seiyuu")):
+        raise HTTPException(status_code=400, detail="Item has no metadata to mine for character memory")
+
+    raw, provider = await _llm_one_shot_json(_build_auto_character_memory_prompt(item))
+    try:
+        parsed = _parse_json_payload(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Character-memory model returned invalid JSON — {exc}")
+    suggested = _coerce_character_memory_text(parsed)
+
+    existing = await db.get_item_character_memory(item_id) or ""
+    merged = db.merge_glossaries(existing, suggested)
+    existing_lines = {l.strip().lower() for l in existing.splitlines() if l.strip()}
+    added = [l for l in merged.splitlines() if l.strip().lower() not in existing_lines]
+    if added:
+        await db.set_item_character_memory(item_id, merged)
+    return {
+        "item_id": item_id,
+        "character_memory": merged if added else existing,
+        "added_lines": len(added),
+        "provider": provider,
+    }
+
+
+@router.post("/items/{item_id}/character-memory/auto")
+async def auto_build_item_character_memory(item_id: int, _auth=Depends(require_api_key)):
+    return await build_item_auto_character_memory(item_id)
 
 
 @router.patch("/items/{item_id}/manual-track-count")

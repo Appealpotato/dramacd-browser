@@ -193,9 +193,12 @@ class AutopilotRequest(BaseModel):
     glossary: Optional[str] = None
     character_memory: Optional[str] = None
     review_pass: bool = False
+    # After each track translates, mine the result for proper-noun mappings
+    # and merge them into the item glossary (one extra LLM call per track).
+    glossary_feedback: bool = True
     transcribe_language: str = "ja"
     transcribe_model: Optional[str] = None
-    skip_stages: Optional[list[str]] = None  # any of: metadata_translate, extract, track_titles_translate, transcribe, track_translate
+    skip_stages: Optional[list[str]] = None  # any of: metadata_translate, glossary_build, extract, track_titles_translate, transcribe, track_translate
     force_extract: bool = False
     force_transcribe: bool = False
     force_translate: bool = False
@@ -218,6 +221,9 @@ class AutoTranslateRequest(BaseModel):
     # Second pass: model reviews JP+EN pairs and fixes errors. Doubles job
     # time; meant for free local backends or overnight runs.
     review_pass: bool = False
+    # After translating, mine the result for proper-noun mappings and merge
+    # them into the item glossary (one extra LLM call per track).
+    glossary_feedback: bool = True
     # When true, skip queueing if the track already has an active translation
     # run (used by bulk fan-outs so re-running doesn't waste API quota).
     only_if_missing: bool = False

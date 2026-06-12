@@ -93,6 +93,84 @@ def _apply_review_rows(
     return changed
 
 
+import re as _re
+
+_CJK_RE = _re.compile(r"[぀-ヿ一-鿿]")
+# Segments likely to contain names/proper nouns: katakana runs (loanword or
+# name spellings) or honorific/address markers next to a name.
+_PROPER_NOUN_HINT_RE = _re.compile(
+    r"[゠-ヿ]{2,}|さん|くん|ちゃん|さま|様|先輩|先生|殿|お兄|お姉"
+)
+_FEEDBACK_PAIRS_MAX_CHARS = 3000
+
+
+def _select_feedback_pairs(
+    cleaned_segments: list[dict],
+    translated_map: dict[int, dict],
+    max_chars: int = _FEEDBACK_PAIRS_MAX_CHARS,
+) -> list[dict]:
+    """Pick JP/EN pairs worth mining for glossary rules: name-bearing
+    segments first (katakana runs, honorifics), then any CJK segment, until
+    the character budget is spent. Returns [{"ja": ..., "en": ...}]."""
+    hinted: list[dict] = []
+    plain: list[dict] = []
+    for seg in cleaned_segments:
+        seg_idx = int(seg["segment_index"])
+        ja = str(seg.get("source_text") or "").strip()
+        entry = translated_map.get(seg_idx)
+        en = str((entry or {}).get("text") or "").strip()
+        if not ja or not en or not _CJK_RE.search(ja):
+            continue
+        pair = {"ja": ja, "en": en}
+        (hinted if _PROPER_NOUN_HINT_RE.search(ja) else plain).append(pair)
+    selected: list[dict] = []
+    used = 0
+    for pair in hinted + plain:
+        cost = len(pair["ja"]) + len(pair["en"])
+        if used + cost > max_chars:
+            continue
+        selected.append(pair)
+        used += cost
+    return selected
+
+
+def _build_feedback_glossary_prompt(pairs: list[dict]) -> str:
+    """Post-run prompt: extract the proper-noun mappings the translation
+    actually used, so later tracks of the same item reuse them verbatim
+    (translation_job re-reads the item glossary at the start of every job)."""
+    return (
+        "Below are Japanese→English pairs from a drama CD translation you produced.\n"
+        "Extract ONLY proper-noun mappings the translation actually used:\n"
+        "• Character / person names (e.g. 小霧幸人=Kogiri Yukito)\n"
+        "• Place, organization, or series names\n"
+        "• Recurring invented terms specific to this work\n"
+        "Do NOT include common vocabulary, pronouns, or one-off phrases.\n"
+        "Format: one rule per line, exactly '日本語=English', taken verbatim from the pairs.\n"
+        "Respond ONLY with valid JSON: {\"glossary\": \"line1\\nline2\"} — use \\n between rules.\n"
+        "If nothing qualifies, return {\"glossary\": \"\"}.\n\n"
+        f"PAIRS:\n{json.dumps(pairs, ensure_ascii=False)}"
+    )
+
+
+def _coerce_feedback_glossary(parsed) -> str:
+    """Normalize the feedback model's output to validated '日本語=English'
+    lines: each kept line must contain '=' with a CJK-bearing left side —
+    anything else (commentary, common-word pairs, garbage) is dropped."""
+    if isinstance(parsed, dict):
+        parsed = parsed.get("glossary", "")
+    if isinstance(parsed, list):
+        parsed = "\n".join(str(x or "").strip() for x in parsed)
+    lines = []
+    for line in str(parsed or "").splitlines():
+        line = line.strip()
+        if "=" not in line:
+            continue
+        left, _, right = line.partition("=")
+        if left.strip() and right.strip() and _CJK_RE.search(left):
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def _is_retryable_translation_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
     retry_markers = (
@@ -309,15 +387,30 @@ async def _run_translation_job_inner(job_id: int):
     retry_backoff_seconds = max(0.2, min(10.0, float(metadata.get("retry_backoff_seconds") or 1.0)))
     set_active = bool(metadata.get("set_active", True))
     review_pass = bool(metadata.get("review_pass", False))
+    glossary_feedback = bool(metadata.get("glossary_feedback", True))
     glossary = str(metadata.get("glossary") or "").strip()
     character_memory = str(metadata.get("character_memory") or "").strip()
-    # The library-wide glossary applies to every job, ahead of per-item rules.
+    # Glossary precedence: global → item (DB) → per-job. Jobs queued without an
+    # explicit glossary (autopilot, bulk fan-outs) still pick up the item's
+    # saved rules this way, and feedback-loop additions land mid-run.
     try:
         global_glossary = await db.get_runtime_global_glossary()
     except Exception:
         global_glossary = ""
-    if global_glossary:
-        glossary = db.merge_glossaries(global_glossary, glossary)
+    item_glossary = ""
+    item_character_memory = ""
+    if item_id:
+        try:
+            item_glossary = str(await db.get_item_glossary(item_id) or "").strip()
+        except Exception:
+            item_glossary = ""
+        try:
+            item_character_memory = str(await db.get_item_character_memory(item_id) or "").strip()
+        except Exception:
+            item_character_memory = ""
+    glossary = db.merge_glossaries(global_glossary, item_glossary, glossary)
+    if not character_memory:
+        character_memory = item_character_memory
 
     if provider not in db.SUPPORTED_TRANSLATION_PROVIDERS:
         await db.update_job(job_id, status="failed", error=f"Unsupported provider: {provider}")
@@ -861,6 +954,45 @@ async def _run_translation_job_inner(job_id: int):
     except Exception as share_err:
         logger.warning(f"[translation_job] Sibling-share failed for run {run_id}: {share_err}")
 
+    # Feedback loop: mine the finished translation for the proper-noun
+    # mappings it actually used and merge them into the ITEM glossary, so the
+    # next track of this CD starts with them locked in (every job re-reads
+    # the item glossary at start). Best-effort — never fails the job.
+    glossary_feedback_added = 0
+    if glossary_feedback and item_id:
+        try:
+            from pipeline.json_extract import loads_robust
+
+            pairs = _select_feedback_pairs(cleaned_segments, translated_map)
+            if pairs:
+                raw = await translator._send_text(_build_feedback_glossary_prompt(pairs))
+                try:
+                    parsed = loads_robust(raw)
+                except Exception:
+                    parsed = OpenRouterTrackTranslator._extract_json_candidate(raw)
+                suggested = _coerce_feedback_glossary(parsed)
+                if suggested:
+                    existing = await db.get_item_glossary(item_id) or ""
+                    merged = db.merge_glossaries(existing, suggested)
+                    existing_lines = {l.strip().lower() for l in existing.splitlines() if l.strip()}
+                    added = [l for l in merged.splitlines() if l.strip().lower() not in existing_lines]
+                    if added:
+                        await db.set_item_glossary(item_id, merged)
+                        glossary_feedback_added = len(added)
+                        await db.append_job_event(
+                            job_id,
+                            "info",
+                            f"Glossary feedback: +{len(added)} rule(s) saved to item glossary",
+                            {"added": added[:20]},
+                        )
+        except Exception as fb_err:
+            await db.append_job_event(
+                job_id,
+                "warning",
+                "Glossary feedback skipped",
+                {"error": str(fb_err)[:300]},
+            )
+
     await db.update_job(
         job_id,
         status="completed",
@@ -876,6 +1008,7 @@ async def _run_translation_job_inner(job_id: int):
             "target_language": target_language,
             "segments_translated": len(translated_segments),
             "chunk_count": len(chunks),
+            "glossary_feedback_added": glossary_feedback_added,
         },
         finished_at=datetime.now().isoformat(),
     )

@@ -845,6 +845,7 @@ const app = createApp({
             try { localStorage.setItem('autoTranslateReviewPass', v ? '1' : '0'); } catch (e) {}
         });
         const glossaryAutoBuildBusy = ref(false);
+        const charMemAutoBuildBusy = ref(false);
         const autoTranslateStatus = ref(null);
         const autoTranslateInProgress = ref(false);
         const autoTranslateProgress = ref(null);
@@ -1128,6 +1129,7 @@ const app = createApp({
         // Glossary textarea collapse state inside the Workshop translate card.
         // Default collapsed since most translate runs don't need a glossary.
         const glossaryExpanded = ref(localStorage.getItem('glossaryExpanded') === '1');
+        const charMemExpanded = ref(localStorage.getItem('charMemExpanded') === '1');
         const playerFollowTranscript = ref(true);
         const playerLastUserScrollTime = ref(0);
         const playerAudioElement = ref(null);
@@ -1215,8 +1217,23 @@ const app = createApp({
             }, 600);
         });
 
+        // Character memory is per-item too (items.character_memory) — same
+        // debounced-PUT + load-suppression dance as the glossary above.
+        const _charMemLoading = ref(false);
+        let _charMemSaveTimer = null;
         watch(autoTranslateCharacterMemory, (value) => {
-            localStorage.setItem('autoTranslateCharacterMemory', String(value || ''));
+            if (_charMemLoading.value) return;
+            const itemId = _glossaryItemId.value;
+            if (!itemId) return;
+            if (_charMemSaveTimer) clearTimeout(_charMemSaveTimer);
+            _charMemSaveTimer = setTimeout(() => {
+                _charMemSaveTimer = null;
+                fetch(`/api/items/${itemId}/character-memory`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ character_memory: String(value || '') }),
+                }).catch((err) => console.warn('Character memory save failed:', err));
+            }, 600);
         });
         // Player scroll
         // Lyric-stage line class: returns the visual tier based on distance
@@ -6246,48 +6263,44 @@ const app = createApp({
             loadArchiveContents(newId);
         }, { immediate: true });
 
-        // Per-item glossary load. Fires whenever the Workshop's selected item
-        // changes (including the initial localStorage rehydrate). _glossaryLoading
-        // is true while we set the value so the save-debounce watcher above
-        // doesn't immediately PUT the freshly-loaded text back.
+        // Per-item glossary + character memory load. Fires whenever the
+        // Workshop's selected item changes (including the initial localStorage
+        // rehydrate). The loading flags are true while we set the values so the
+        // save-debounce watchers above don't immediately PUT the freshly-loaded
+        // text back.
+        async function _hydrateItemField(itemId, url, key, loadingRef, targetRef) {
+            let text = '';
+            if (itemId) {
+                try {
+                    const resp = await fetch(url);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        text = String(data[key] || '');
+                    }
+                } catch (err) {
+                    console.warn(`Failed to load item ${key}:`, err);
+                }
+            }
+            loadingRef.value = true;
+            targetRef.value = text;
+            await nextTick();
+            loadingRef.value = false;
+        }
         watch(pipelineSelectedItemId, async (newId) => {
-            // Drop any pending save from the previous item — its target id is stale.
+            // Drop any pending saves from the previous item — their target id is stale.
             if (_glossarySaveTimer) {
                 clearTimeout(_glossarySaveTimer);
                 _glossarySaveTimer = null;
             }
-            if (!newId) {
-                _glossaryLoading.value = true;
-                _glossaryItemId.value = null;
-                autoTranslateGlossary.value = '';
-                await nextTick();
-                _glossaryLoading.value = false;
-                return;
+            if (_charMemSaveTimer) {
+                clearTimeout(_charMemSaveTimer);
+                _charMemSaveTimer = null;
             }
-            try {
-                const resp = await fetch(`/api/items/${newId}/glossary`);
-                if (!resp.ok) {
-                    _glossaryLoading.value = true;
-                    _glossaryItemId.value = newId;
-                    autoTranslateGlossary.value = '';
-                    await nextTick();
-                    _glossaryLoading.value = false;
-                    return;
-                }
-                const data = await resp.json();
-                _glossaryLoading.value = true;
-                _glossaryItemId.value = newId;
-                autoTranslateGlossary.value = String(data.glossary || '');
-                await nextTick();
-                _glossaryLoading.value = false;
-            } catch (err) {
-                console.warn('Failed to load item glossary:', err);
-                _glossaryLoading.value = true;
-                _glossaryItemId.value = newId;
-                autoTranslateGlossary.value = '';
-                await nextTick();
-                _glossaryLoading.value = false;
-            }
+            _glossaryItemId.value = newId || null;
+            await Promise.all([
+                _hydrateItemField(newId, `/api/items/${newId}/glossary`, 'glossary', _glossaryLoading, autoTranslateGlossary),
+                _hydrateItemField(newId, `/api/items/${newId}/character-memory`, 'character_memory', _charMemLoading, autoTranslateCharacterMemory),
+            ]);
         }, { immediate: true });
 
         // One LLM call mines the item's own metadata (title/desc/seiyuu, and
@@ -6318,6 +6331,36 @@ const app = createApp({
                 pushToast({ kind: 'failure', title: 'Glossary auto-build', body: String((err && err.message) || err), ttl: 5000 });
             } finally {
                 glossaryAutoBuildBusy.value = false;
+            }
+        }
+
+        // Same idea for character memory: one LLM call describes the cast
+        // (names, speech style, relationship to the listener) from metadata,
+        // merged line-wise so user-written notes always survive.
+        async function autoBuildCharacterMemory() {
+            const itemId = _glossaryItemId.value;
+            if (!itemId || charMemAutoBuildBusy.value) return;
+            charMemAutoBuildBusy.value = true;
+            try {
+                const resp = await fetch(`/api/items/${itemId}/character-memory/auto`, { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    pushToast({ kind: 'failure', title: 'Character memory auto-build', body: String(data.detail || 'Request failed'), ttl: 5000 });
+                    return;
+                }
+                if (Number(data.added_lines || 0) > 0) {
+                    _charMemLoading.value = true;
+                    autoTranslateCharacterMemory.value = String(data.character_memory || '');
+                    await nextTick();
+                    _charMemLoading.value = false;
+                    pushToast({ kind: 'success', title: 'Character memory auto-build', body: `Added ${data.added_lines} line(s) from metadata`, ttl: 4000 });
+                } else {
+                    pushToast({ kind: 'warning', title: 'Character memory auto-build', body: 'No new notes found in metadata', ttl: 4000 });
+                }
+            } catch (err) {
+                pushToast({ kind: 'failure', title: 'Character memory auto-build', body: String((err && err.message) || err), ttl: 5000 });
+            } finally {
+                charMemAutoBuildBusy.value = false;
             }
         }
 
@@ -7481,6 +7524,11 @@ const app = createApp({
         function toggleGlossaryExpanded() {
             glossaryExpanded.value = !glossaryExpanded.value;
             localStorage.setItem('glossaryExpanded', glossaryExpanded.value ? '1' : '0');
+        }
+
+        function toggleCharMemExpanded() {
+            charMemExpanded.value = !charMemExpanded.value;
+            localStorage.setItem('charMemExpanded', charMemExpanded.value ? '1' : '0');
         }
 
         function togglePlayerEditMode() {
@@ -9174,9 +9222,10 @@ const app = createApp({
             const savedFetchProgress = localStorage.getItem('fetchProgress');
             // Glossary is now per-item; populated when an item is loaded into the Workshop.
             autoTranslateGlossary.value = '';
-            // Drop the old global value if it's still hanging around from a prior version.
+            // Drop the old global values if they're still hanging around from a prior version
+            // (glossary and character memory are per-item now, stored server-side).
             try { localStorage.removeItem('autoTranslateGlossary'); } catch (e) {}
-            autoTranslateCharacterMemory.value = localStorage.getItem('autoTranslateCharacterMemory') || '';
+            try { localStorage.removeItem('autoTranslateCharacterMemory'); } catch (e) {}
             autoTranslateMaxRetries.value = Number(localStorage.getItem('autoTranslateMaxRetries') || autoTranslateMaxRetries.value);
             autoTranslateRetryBackoff.value = Number(localStorage.getItem('autoTranslateRetryBackoff') || autoTranslateRetryBackoff.value);
             const savedProvider = localStorage.getItem('apiTranslationProvider');
@@ -9690,6 +9739,7 @@ const app = createApp({
             autoTranslateInProgress, autoTranslateProgress, autoTranslateLiveLines, autoTranslateControlBusy,
             autoTranslateGlossary, autoTranslateCharacterMemory,
             autoTranslateReviewPass, autoBuildGlossary, glossaryAutoBuildBusy, apiGlobalGlossary,
+            autoBuildCharacterMemory, charMemAutoBuildBusy,
             apiSettingsBusy, apiSettingsError, apiSettingsSuccess, apiTranslationProvider,
             apiGeminiModel, apiGeminiKeyInput, apiGeminiHasKey, apiGeminiKeySource,
             apiOpenRouterModel, apiOpenRouterKeyInput, apiOpenRouterHasKey, apiOpenRouterKeySource,
@@ -9858,6 +9908,7 @@ const app = createApp({
             playerTranscriptRuns, selectPlayerTranscriptRun, describeTranscriptRun,
             playerEditMode, togglePlayerEditMode,
             glossaryExpanded, toggleGlossaryExpanded,
+            charMemExpanded, toggleCharMemExpanded,
             playerAudioElement,
             // Inline segment editor (shared between Player + Workshop).
             editingSegment, editingSegmentText, editingSegmentSaving, editingSegmentError,

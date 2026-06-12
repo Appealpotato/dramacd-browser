@@ -59,6 +59,7 @@ async def queue_autopilot(
     glossary: str | None = None,
     character_memory: str | None = None,
     review_pass: bool = False,
+    glossary_feedback: bool = True,
     transcribe_language: str = "ja",
     transcribe_model: str | None = None,
     skip_stages: list[str] | None = None,
@@ -79,6 +80,7 @@ async def queue_autopilot(
         "glossary": glossary,
         "character_memory": character_memory,
         "review_pass": bool(review_pass),
+        "glossary_feedback": bool(glossary_feedback),
         "transcribe_language": transcribe_language,
         "transcribe_model": transcribe_model,
         "skip_stages": list(skip_stages or []),
@@ -110,6 +112,7 @@ async def queue_translation(
     glossary: str | None = None,
     character_memory: str | None = None,
     review_pass: bool = False,
+    glossary_feedback: bool = True,
 ) -> int:
     metadata = {
         "item_id": int(item_id),
@@ -132,6 +135,9 @@ async def queue_translation(
         metadata["character_memory"] = str(character_memory)
     if review_pass:
         metadata["review_pass"] = True
+    if not glossary_feedback:
+        # Default-on: only an explicit opt-out lands in metadata.
+        metadata["glossary_feedback"] = False
     job_id = await db.create_job("pipeline_translate", status="queued", metadata=metadata)
     await db.append_job_event(
         job_id,

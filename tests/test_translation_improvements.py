@@ -232,5 +232,213 @@ class ChunkAutoSizingTests(unittest.TestCase):
         self.assertNotIn("review_pass", meta)
 
 
+class CharacterMemoryDbTests(unittest.TestCase):
+    """Migration 029 column + accessors, including the missing-item contract
+    (None/False) the endpoints rely on for 404s."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        cls._old_db_path = database.DB_PATH
+        database.DB_PATH = Path(cls._tmpdir.name) / "test.db"
+        asyncio.run(database.init_db())
+
+        async def _insert_item():
+            db = await database.get_db()
+            try:
+                cursor = await db.execute(
+                    "INSERT INTO items (product_code, title) VALUES ('RJ999001', 'テスト')"
+                )
+                await db.commit()
+                return cursor.lastrowid
+            finally:
+                await db.close()
+
+        cls.item_id = asyncio.run(_insert_item())
+
+    @classmethod
+    def tearDownClass(cls):
+        database.DB_PATH = cls._old_db_path
+        cls._tmpdir.cleanup()
+
+    def test_round_trip_preserves_newlines(self):
+        text = "幸人: rough, teasing older brother\nListener: younger sister"
+        self.assertTrue(asyncio.run(database.set_item_character_memory(self.item_id, text)))
+        self.assertEqual(asyncio.run(database.get_item_character_memory(self.item_id)), text)
+
+    def test_fresh_item_reads_empty_string(self):
+        async def _insert():
+            db = await database.get_db()
+            try:
+                cursor = await db.execute("INSERT INTO items (product_code) VALUES ('RJ999002')")
+                await db.commit()
+                return cursor.lastrowid
+            finally:
+                await db.close()
+
+        new_id = asyncio.run(_insert())
+        self.assertEqual(asyncio.run(database.get_item_character_memory(new_id)), "")
+
+    def test_missing_item_contract(self):
+        self.assertIsNone(asyncio.run(database.get_item_character_memory(99999999)))
+        self.assertFalse(asyncio.run(database.set_item_character_memory(99999999, "x")))
+
+
+class TranslationJobItemFallbackTests(unittest.TestCase):
+    """Task A coherence fix: jobs queued without a glossary must still merge
+    the item's saved glossary + character memory from the DB (global → item →
+    job precedence). Tested at the merge layer the job code calls."""
+
+    def test_merge_order_global_item_job(self):
+        merged = database.merge_glossaries("g=G", "i=I", "j=J")
+        self.assertEqual(merged.splitlines(), ["g=G", "i=I", "j=J"])
+
+    def test_job_rules_dedupe_against_item(self):
+        merged = database.merge_glossaries("", "小霧=Kogiri", "小霧=kogiri\n茅=Chigaya")
+        self.assertEqual(merged.splitlines(), ["小霧=Kogiri", "茅=Chigaya"])
+
+
+class AutoCharacterMemoryTests(unittest.TestCase):
+    def test_prompt_includes_metadata_and_constraints(self):
+        from routers.api import _build_auto_character_memory_prompt
+
+        prompt = _build_auto_character_memory_prompt(
+            {
+                "title": "カフェ・ロマーナへようこそ",
+                "seiyuu": '["茶介"]',
+                "description": "小霧幸人の恋の物語。",
+                "description_en": "The love story of Kogiri Yukito.",
+            }
+        )
+        self.assertIn("カフェ・ロマーナへようこそ", prompt)
+        self.assertIn("茶介", prompt)
+        self.assertIn("Kogiri Yukito", prompt)
+        self.assertIn("Do NOT invent", prompt)
+        self.assertIn('{"character_memory"', prompt.replace("\\\"", "\""))
+
+    def test_coerce_character_memory_shapes(self):
+        from routers.api import _coerce_character_memory_text
+
+        self.assertEqual(_coerce_character_memory_text({"character_memory": "a\nb"}), "a\nb")
+        self.assertEqual(_coerce_character_memory_text({"character_memory": ["a", "b"]}), "a\nb")
+        self.assertEqual(_coerce_character_memory_text(["a"]), "a")
+        self.assertEqual(_coerce_character_memory_text(None), "")
+
+
+class AutopilotGlossaryStageTests(unittest.TestCase):
+    def test_stage_registered_in_order(self):
+        from pipeline.autopilot_job import STAGE_NAMES, stage_label
+
+        self.assertIn("glossary_build", STAGE_NAMES)
+        # Must run after metadata translation (it mines title_en/description_en)
+        # and before transcription (hotwords read the item glossary).
+        self.assertLess(
+            STAGE_NAMES.index("metadata_translate"), STAGE_NAMES.index("glossary_build")
+        )
+        self.assertLess(STAGE_NAMES.index("glossary_build"), STAGE_NAMES.index("transcribe"))
+        self.assertEqual(stage_label("glossary_build"), "Building glossary")
+
+
+class FeedbackGlossaryTests(unittest.TestCase):
+    def test_select_prefers_name_bearing_segments_and_caps(self):
+        from pipeline.translation_job import _select_feedback_pairs
+
+        cleaned = [
+            {"segment_index": 0, "source_text": "おはよう"},
+            {"segment_index": 1, "source_text": "ロマーナへようこそ"},  # katakana run
+            {"segment_index": 2, "source_text": "Hello there"},  # no CJK -> dropped
+            {"segment_index": 3, "source_text": "幸人くん、こっち"},  # honorific
+        ]
+        tmap = {
+            0: {"text": "Morning"},
+            1: {"text": "Welcome to Romana"},
+            2: {"text": "Hello there"},
+            3: {"text": "Yukito, over here"},
+        }
+        pairs = _select_feedback_pairs(cleaned, tmap)
+        self.assertEqual(len(pairs), 3)
+        # Hinted segments come first regardless of original order.
+        self.assertEqual(pairs[0]["ja"], "ロマーナへようこそ")
+        self.assertEqual(pairs[1]["ja"], "幸人くん、こっち")
+        self.assertEqual(pairs[2]["ja"], "おはよう")
+
+    def test_select_respects_char_budget(self):
+        from pipeline.translation_job import _select_feedback_pairs
+
+        cleaned = [{"segment_index": i, "source_text": "あ" * 100} for i in range(100)]
+        tmap = {i: {"text": "x" * 100} for i in range(100)}
+        pairs = _select_feedback_pairs(cleaned, tmap, max_chars=1000)
+        self.assertEqual(len(pairs), 5)  # 200 chars per pair
+
+    def test_select_skips_untranslated_segments(self):
+        from pipeline.translation_job import _select_feedback_pairs
+
+        cleaned = [{"segment_index": 0, "source_text": "おはよう"}]
+        self.assertEqual(_select_feedback_pairs(cleaned, {}), [])
+
+    def test_prompt_contains_pairs_and_contract(self):
+        from pipeline.translation_job import _build_feedback_glossary_prompt
+
+        prompt = _build_feedback_glossary_prompt([{"ja": "ロマーナ", "en": "Romana"}])
+        self.assertIn("ロマーナ", prompt)
+        self.assertIn("Romana", prompt)
+        self.assertIn("日本語=English", prompt)
+        self.assertIn("proper-noun", prompt)
+        self.assertIn('{"glossary"', prompt.replace("\\\"", "\""))
+
+    def test_coerce_validates_lines(self):
+        from pipeline.translation_job import _coerce_feedback_glossary
+
+        raw = {
+            "glossary": "小霧幸人=Kogiri Yukito\n"
+            "no equals sign here\n"
+            "ascii=only left side\n"
+            "=missing left\n"
+            "茶介=Chasuke"
+        }
+        self.assertEqual(
+            _coerce_feedback_glossary(raw), "小霧幸人=Kogiri Yukito\n茶介=Chasuke"
+        )
+
+    def test_coerce_accepts_list_and_none(self):
+        from pipeline.translation_job import _coerce_feedback_glossary
+
+        self.assertEqual(_coerce_feedback_glossary({"glossary": ["茶介=Chasuke"]}), "茶介=Chasuke")
+        self.assertEqual(_coerce_feedback_glossary(None), "")
+
+
+class GlossaryFeedbackFlagTests(unittest.TestCase):
+    """glossary_feedback is default-on: only an explicit opt-out is stored in
+    job metadata, so old queued jobs keep working unchanged."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmpdir = tempfile.TemporaryDirectory()
+        cls._old_db_path = database.DB_PATH
+        database.DB_PATH = Path(cls._tmpdir.name) / "test.db"
+        asyncio.run(database.init_db())
+
+    @classmethod
+    def tearDownClass(cls):
+        database.DB_PATH = cls._old_db_path
+        cls._tmpdir.cleanup()
+
+    def test_default_on_not_stored(self):
+        from pipeline.service import queue_translation
+
+        job_id = asyncio.run(queue_translation(item_id=1, track_id=2, transcript_run_id=3))
+        meta = asyncio.run(database.get_job(job_id))["metadata_json"]
+        self.assertNotIn("glossary_feedback", meta)
+
+    def test_opt_out_stored(self):
+        from pipeline.service import queue_translation
+
+        job_id = asyncio.run(
+            queue_translation(item_id=1, track_id=2, transcript_run_id=3, glossary_feedback=False)
+        )
+        meta = asyncio.run(database.get_job(job_id))["metadata_json"]
+        self.assertIs(meta["glossary_feedback"], False)
+
+
 if __name__ == "__main__":
     unittest.main()

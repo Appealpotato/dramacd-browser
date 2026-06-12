@@ -406,6 +406,7 @@ MIGRATION_IDS = [
     "026_tokutens_metadata_sources",
     "027_add_rejet_shop",
     "028_sync_shop_enum_with_sources",
+    "029_add_items_character_memory",
 ]
 
 # Migrations whose first run should trigger an on-disk backup of library.db.
@@ -1149,6 +1150,17 @@ async def _migration_023_add_items_glossary(db: aiosqlite.Connection):
         )
 
 
+async def _migration_029_add_items_character_memory(db: aiosqlite.Connection):
+    """Per-item character memory. Free-form notes about the cast (names,
+    speech style, formality, relationship to the listener) injected into
+    translation prompts alongside the glossary. Scoped per item like the
+    glossary so one CD's characters don't bleed into another's."""
+    if not await _column_exists(db, "items", "character_memory"):
+        await db.execute(
+            "ALTER TABLE items ADD COLUMN character_memory TEXT NOT NULL DEFAULT ''"
+        )
+
+
 async def _migration_025_add_items_listen_status(db: aiosqlite.Connection):
     """Personal listening-progress tracker for drama CDs — mirrors
     games.play_status. No CHECK constraint (items has none on translation_status
@@ -1584,6 +1596,7 @@ MIGRATION_HANDLERS = {
     "026_tokutens_metadata_sources": _migration_026_tokutens_metadata_sources,
     "027_add_rejet_shop": _migration_027_add_rejet_shop,
     "028_sync_shop_enum_with_sources": _migration_028_sync_shop_enum_with_sources,
+    "029_add_items_character_memory": _migration_029_add_items_character_memory,
 }
 
 
@@ -3072,6 +3085,34 @@ async def set_item_glossary(item_id: int, glossary: str) -> bool:
         cursor = await db.execute(
             "UPDATE items SET glossary = ?, updated_at = ? WHERE id = ?",
             (str(glossary or ""), now, item_id),
+        )
+        await db.commit()
+        return cursor.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def get_item_character_memory(item_id: int) -> str | None:
+    """Return the per-item character memory, or None if the item is missing."""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT character_memory FROM items WHERE id = ?", (item_id,))
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        return row["character_memory"] or ""
+    finally:
+        await db.close()
+
+
+async def set_item_character_memory(item_id: int, character_memory: str) -> bool:
+    """Write the per-item character memory. Returns False if item missing."""
+    db = await get_db()
+    try:
+        now = datetime.now().isoformat()
+        cursor = await db.execute(
+            "UPDATE items SET character_memory = ?, updated_at = ? WHERE id = ?",
+            (str(character_memory or ""), now, item_id),
         )
         await db.commit()
         return cursor.rowcount > 0

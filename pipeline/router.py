@@ -125,6 +125,7 @@ async def queue_item_autopilot(
     # Validate skip_stages values up front so callers get an immediate error.
     valid_stages = {
         "metadata_translate",
+        "glossary_build",
         "extract",
         "track_titles_translate",
         "transcribe",
@@ -150,6 +151,7 @@ async def queue_item_autopilot(
         glossary=request.glossary,
         character_memory=request.character_memory,
         review_pass=request.review_pass,
+        glossary_feedback=request.glossary_feedback,
         transcribe_language=request.transcribe_language,
         transcribe_model=request.transcribe_model,
         skip_stages=request.skip_stages,
@@ -866,6 +868,7 @@ async def queue_track_auto_translation(
         glossary=request.glossary,
         character_memory=request.character_memory,
         review_pass=request.review_pass,
+        glossary_feedback=request.glossary_feedback,
     )
     background_tasks.add_task(run_translation_job, job_id)
     return {
@@ -971,6 +974,7 @@ async def restart_pipeline_autopilot_job(
         glossary=metadata.get("glossary"),
         character_memory=metadata.get("character_memory"),
         review_pass=bool(metadata.get("review_pass", False)),
+        glossary_feedback=bool(metadata.get("glossary_feedback", True)),
         transcribe_language=metadata.get("transcribe_language") or "ja",
         transcribe_model=metadata.get("transcribe_model"),
         skip_stages=list(metadata.get("skip_stages") or []),
