@@ -379,7 +379,14 @@ async def _refetch_metadata(item_id: int, product_code: str):
 
 
 def _parse_json_payload(raw: str):
+    """Parse a model response that SHOULD be pure JSON but often isn't:
+    reasoning models prepend <think> blocks, chatty models wrap the JSON in
+    code fences or prose ("Here is the translation: {...}"). Try the strict
+    read first, then fall back to the outermost {...} / [...] span."""
     payload = (raw or "").strip()
+    # Reasoning models (DeepSeek-R1 family etc.) emit their chain of thought
+    # in-band; everything before </think> is never part of the answer.
+    payload = re.sub(r"(?s)<think>.*?</think>", "", payload).strip()
     if payload.startswith("```"):
         payload = payload.strip("`")
         marker_idx = payload.find("\n")
@@ -390,7 +397,25 @@ def _parse_json_payload(raw: str):
         payload = payload[4:].strip()
     if payload.endswith("```"):
         payload = payload[:-3].strip()
-    return json.loads(payload)
+    try:
+        return json.loads(payload)
+    except Exception:
+        pass
+    # Prose around the JSON: take the outermost object/array span. Try the
+    # bracket type that OPENS FIRST before the other, so an array containing
+    # objects isn't mistaken for its first inner object.
+    spans = []
+    for opener, closer in (("{", "}"), ("[", "]")):
+        first = payload.find(opener)
+        last = payload.rfind(closer)
+        if first >= 0 and last > first:
+            spans.append((first, payload[first:last + 1]))
+    for _, candidate in sorted(spans):
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+    raise ValueError(f"no parseable JSON in model response: {payload[:200]!r}")
 
 
 def _coerce_translation_payload(parsed):
@@ -425,6 +450,10 @@ def _coerce_name_list(value) -> list[str]:
 def _coerce_notes_list(value) -> list[str]:
     if value is None:
         return []
+    # Models frequently return cultural_notes as one prose string instead of a
+    # list — keep it rather than silently dropping the content.
+    if isinstance(value, str):
+        value = [value]
     raw = value if isinstance(value, list) else []
     notes = []
     seen = set()
@@ -532,8 +561,8 @@ async def _translate_title_description_with_gemini(title_ja: str, description_ja
 
     try:
         parsed_raw = _parse_json_payload(str(parts[0].get("text") or ""))
-    except Exception:
-        raise HTTPException(status_code=502, detail="Gemini returned invalid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Gemini returned invalid JSON — {exc}")
     parsed = _coerce_translation_payload(parsed_raw)
     title_en = str(parsed.get("title_en") or "").strip()
     description_en = str(parsed.get("description_en") or "").strip()
@@ -656,8 +685,8 @@ async def _translate_title_description_with_openrouter(title_ja: str, descriptio
 
     try:
         parsed_raw = _parse_json_payload(content)
-    except Exception:
-        raise HTTPException(status_code=502, detail="OpenRouter returned invalid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OpenRouter returned invalid JSON — {exc}")
     parsed = _coerce_translation_payload(parsed_raw)
     title_en = str(parsed.get("title_en") or "").strip()
     description_en = str(parsed.get("description_en") or "").strip()
@@ -781,8 +810,8 @@ async def _translate_title_description_with_chutes(title_ja: str, description_ja
 
     try:
         parsed_raw = _parse_json_payload(content)
-    except Exception:
-        raise HTTPException(status_code=502, detail="Chutes returned invalid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Chutes returned invalid JSON — {exc}")
     parsed = _coerce_translation_payload(parsed_raw)
     title_en = str(parsed.get("title_en") or "").strip()
     description_en = str(parsed.get("description_en") or "").strip()
@@ -866,6 +895,11 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             content = content_field.strip()
         if not content:
             raise HTTPException(status_code=502, detail=f"Anthropic-compatible returned empty content: {str(data)[:200]}")
+        if data.get("stop_reason") == "max_tokens":
+            raise HTTPException(
+                status_code=502,
+                detail="Anthropic-compatible output hit the max_tokens cap mid-JSON — the description may be too long for one translation call",
+            )
     else:
         from pipeline.openrouter_translator import _normalize_chat_completions_url
         endpoint = _normalize_chat_completions_url(base_url)
@@ -928,8 +962,8 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
 
     try:
         parsed_raw = _parse_json_payload(content)
-    except Exception:
-        raise HTTPException(status_code=502, detail="OpenAI-compatible returned invalid JSON")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"OpenAI-compatible returned invalid JSON — {exc}")
     parsed = _coerce_translation_payload(parsed_raw)
     title_en = str(parsed.get("title_en") or "").strip()
     description_en = str(parsed.get("description_en") or "").strip()
