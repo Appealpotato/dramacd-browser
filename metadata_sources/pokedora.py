@@ -24,7 +24,12 @@ class PokedoraSource(MetadataSource):
     label = "Pokedora"
     url_example = "https://pokedora.com/products/detail.php?product_id=85510"
     supports_search = False
-    _url_re = re.compile(r"pokedora\.com/products/detail\.php\?[^ ]*?product_id=(\d+)", re.I)
+    # `product_id` must start a query param ((?:^|[?&]) after the optional
+    # prefix) — otherwise the lazy prefix lets it match as a SUBSTRING of
+    # `watch_product_id=`/`related_product_id=` and capture the wrong product.
+    _url_re = re.compile(
+        r"pokedora\.com/products/detail\.php\?(?:[^#\s]*[?&])?product_id=(\d+)", re.I
+    )
 
     # ------------------------------------------------------------- fetch
     async def fetch_by_url(self, client: httpx.AsyncClient, url: str) -> dict:
@@ -52,7 +57,7 @@ class PokedoraSource(MetadataSource):
         elif soup.title:
             raw_title = soup.title.get_text(strip=True)
         if raw_title:
-            head = raw_title.split("|")[0].strip()
+            head = re.split(r"[|｜]", raw_title)[0].strip()
             head = re.sub(r"【[^】]*】\s*$", "", head).strip()
             meta["title"] = head or None
 

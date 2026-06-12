@@ -1981,6 +1981,20 @@ select, .filter-select {
         overflow-y: visible !important;
     }
 
+    /* Player tab: the lyrics pane scrolls inside a bounded ancestor chain;
+       with the stacked layout's height:auto it would grow to the full
+       transcript length and push the playback controls below the fold. Give
+       the player column the viewport and drop the sidebar during playback —
+       same treatment the ≤768px block applies, which previously left the
+       769–1080px range broken. */
+    .workspace[data-tab="player"] > .control-column {
+        display: none;
+    }
+    .workspace[data-tab="player"] > .library-column {
+        height: 100vh;
+        height: 100dvh;
+    }
+
     .control-grid {
         grid-template-columns: 1fr 1fr 1fr;
     }

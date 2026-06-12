@@ -384,7 +384,9 @@ async def _apply_to_tokuten(tokuten_id: int, meta: dict, fields: set[str]) -> di
             mirror["description"] = meta["description"]
             applied.append("description")
         if "shop" in fields and meta.get("source"):
-            _set("shop", meta["source"])
+            # Wayback parses archived DLsite pages, so the real shop is dlsite
+            # — and 'wayback' isn't in the tokutens.shop CHECK enum anyway.
+            _set("shop", "dlsite" if meta["source"] == "wayback" else meta["source"])
             applied.append("shop")
         if "source_url" in fields and meta.get("source_url"):
             _set("source_url", meta["source_url"])

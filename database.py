@@ -2470,15 +2470,35 @@ async def update_item_user_data(item_id: int, data: dict):
                 file_format: list[str] = []
                 try:
                     if p.is_dir():
+                        import asyncio as _asyncio
                         from config import AUDIO_EXTENSIONS as _AUDIO_EXTS
-                        audio = sorted(
-                            fp for fp in p.rglob("*")
-                            if fp.is_file() and fp.suffix.lower() in _AUDIO_EXTS
-                        )
+
+                        def _enum_audio() -> tuple:
+                            # Bounded walk: archive_path comes from the client,
+                            # so a drive root here must not become a runaway
+                            # recursive scan that blocks the event loop.
+                            out = []
+                            visited = 0
+                            for fp in p.rglob("*"):
+                                visited += 1
+                                if visited > 50000 or len(out) >= 5000:
+                                    break
+                                if fp.is_file() and fp.suffix.lower() in _AUDIO_EXTS:
+                                    out.append(fp)
+                            out.sort()
+                            size = 0
+                            for fp in out:
+                                try:
+                                    size += fp.stat().st_size
+                                except OSError:
+                                    pass
+                            return out, size
+
+                        audio, total_audio_size = await _asyncio.to_thread(_enum_audio)
                         if audio:
                             files_value = [str(fp) for fp in audio]
                             file_count = len(audio)
-                            total_size = sum((fp.stat().st_size for fp in audio), 0)
+                            total_size = total_audio_size
                             file_format = sorted({
                                 fp.suffix.lower().lstrip(".") for fp in audio if fp.suffix
                             })
@@ -3970,13 +3990,41 @@ async def replace_pipeline_tracks_for_item(item_id: int, tracks: list[dict]) -> 
         existing_by_path: dict[str, int] = {
             row["track_path"]: int(row["id"]) for row in await cursor.fetchall()
         }
-        new_paths: set[str] = set()
+        new_paths: set[str] = {
+            t["track_path"] for t in tracks if t.get("track_path")
+        }
+
+        # Rename-remap pass: a renamed/moved folder changes every track_path
+        # while the filenames stay the same. Without this, those rows would
+        # fall through to delete+insert and the deletes would CASCADE away
+        # their transcripts/translations even though the audio still exists.
+        # Claim each stale row whose filename uniquely matches an incoming
+        # path's filename (unique on BOTH sides, so duplicate basenames in
+        # different subfolders never cross-wire) and just move it.
+        unmatched_new = [p for p in new_paths if p not in existing_by_path]
+        unmatched_old = [p for p in existing_by_path if p not in new_paths]
+        old_by_name: dict[str, list[str]] = {}
+        for p in unmatched_old:
+            old_by_name.setdefault(Path(p).name.lower(), []).append(p)
+        new_by_name: dict[str, list[str]] = {}
+        for p in unmatched_new:
+            new_by_name.setdefault(Path(p).name.lower(), []).append(p)
+        for name, new_candidates in new_by_name.items():
+            old_candidates = old_by_name.get(name) or []
+            if len(new_candidates) == 1 and len(old_candidates) == 1:
+                old_p, new_p = old_candidates[0], new_candidates[0]
+                row_id = existing_by_path.pop(old_p)
+                await db.execute(
+                    "UPDATE pipeline_tracks SET track_path = ?, updated_at = ? WHERE id = ?",
+                    (new_p, now, row_id),
+                )
+                existing_by_path[new_p] = row_id
+
         upserted = 0
         for track in tracks:
             tp = track.get("track_path")
             if not tp:
                 continue
-            new_paths.add(tp)
             existing_id = existing_by_path.get(tp)
             if existing_id is not None:
                 # Update only the columns that re-indexing might legitimately

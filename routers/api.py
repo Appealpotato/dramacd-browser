@@ -26,6 +26,11 @@ import database as db
 
 router = APIRouter(prefix="/api")
 
+# Folders the local user chose via /system/pick-folder this session. Acts as
+# the allowlist (together with the configured scan paths) for
+# /system/list-addable-children, which otherwise takes a client-supplied path.
+_picked_dirs: set[str] = set()
+
 # Regex to extract product code from a DLsite URL
 DLSITE_URL_PATTERN = re.compile(r'(RJ|BJ|VJ)\d{6,8}', re.IGNORECASE)
 ALLOWED_COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -180,6 +185,13 @@ async def system_pick_folder(
 
     if picked is None:
         return {"path": None, "cancelled": True}
+    # Remember locally-picked folders: /system/list-addable-children only
+    # enumerates roots the user actually chose (or configured scan paths),
+    # so a remote client can't use it to browse arbitrary directories.
+    try:
+        _picked_dirs.add(str(Path(picked).resolve()).lower())
+    except OSError:
+        pass
     return {"path": picked, "cancelled": False}
 
 
@@ -233,7 +245,13 @@ async def system_list_addable_children(
       - a subfolder of archives → one 'archive' entry per archive inside.
     Multi-volume RARs collapse to their first part. If the folder itself only
     holds loose audio (a single extracted CD), it returns one 'folder' entry
-    for the folder. Returns `{"folder", "entries":[{"path","name","kind"}]}`."""
+    for the folder. Returns `{"folder", "entries":[{"path","name","kind"}]}`.
+
+    The folder must sit under a configured scan path or a directory the user
+    picked through /system/pick-folder this session — this endpoint takes a
+    client-supplied path and must not double as a remote filesystem browser."""
+    import asyncio
+    import os as _os
     from pathlib import Path as _Path
     from config import ARCHIVE_EXTENSIONS, AUDIO_EXTENSIONS
     from scanner import get_part_number
@@ -246,56 +264,97 @@ async def system_list_addable_children(
     if not root.is_dir():
         raise HTTPException(status_code=400, detail="Folder does not exist or is not a directory")
 
+    try:
+        resolved_root = str(root.resolve()).lower()
+    except OSError:
+        raise HTTPException(status_code=400, detail="Folder path could not be resolved")
+    allowed_roots = set(_picked_dirs)
+    try:
+        for sp in await db.get_scan_paths():
+            if sp:
+                allowed_roots.add(str(_Path(str(sp)).resolve()).lower())
+    except Exception:
+        pass
+    if not any(
+        resolved_root == a or resolved_root.startswith(a + _os.sep)
+        for a in allowed_roots
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Folder is outside the scan paths — pick it via the folder picker first",
+        )
+
+    # Bounds: this endpoint must never become a server-freezing recursive walk
+    # (drive roots, UNC shares). The walk also runs in a thread, off the loop.
+    MAX_ENTRIES = 500
+    MAX_VISITS_PER_CHILD = 20000
+
     def _is_continuation(name: str) -> bool:
         # Multi-volume RAR: keep .part1, drop .part2+ (RAR streams the rest).
         pn = get_part_number(name)
         return pn is not None and pn != 1
 
-    def _has_audio(base: _Path) -> bool:
+    def _scan_dir(base: _Path) -> tuple:
+        """Single bounded walk: (has_audio, archives). Stops at the first
+        audio hit — an audio-bearing folder is one 'folder' entry and its
+        inner archives are irrelevant."""
+        has_audio = False
+        archives = []
+        visited = 0
         try:
             for f in base.rglob("*"):
-                if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS:
-                    return True
+                visited += 1
+                if visited > MAX_VISITS_PER_CHILD:
+                    break
+                if not f.is_file():
+                    continue
+                suf = f.suffix.lower()
+                if suf in AUDIO_EXTENSIONS:
+                    has_audio = True
+                    break
+                if suf in ARCHIVE_EXTENSIONS and not _is_continuation(f.name):
+                    archives.append(f)
         except OSError:
             pass
-        return False
+        return has_audio, sorted(archives, key=lambda p: str(p).lower())
 
-    def _archives_in(base: _Path) -> list:
-        out = []
+    def _enumerate() -> tuple:
+        entries = []
+        truncated = False
         try:
-            for f in base.rglob("*"):
-                if f.is_file() and f.suffix.lower() in ARCHIVE_EXTENSIONS and not _is_continuation(f.name):
-                    out.append(f)
-        except OSError:
-            pass
-        return sorted(out, key=lambda p: str(p).lower())
+            children = sorted(root.iterdir(), key=lambda c: c.name.lower())
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Cannot read folder: {e}")
 
-    entries = []
-    try:
-        children = sorted(root.iterdir(), key=lambda c: c.name.lower())
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Cannot read folder: {e}")
+        for child in children:
+            if len(entries) >= MAX_ENTRIES:
+                truncated = True
+                break
+            try:
+                if child.is_file():
+                    if child.suffix.lower() in ARCHIVE_EXTENSIONS and not _is_continuation(child.name):
+                        entries.append({"path": str(child), "name": child.name, "kind": "archive"})
+                elif child.is_dir():
+                    has_audio, archives = _scan_dir(child)
+                    if has_audio:
+                        entries.append({"path": str(child), "name": child.name, "kind": "folder"})
+                    else:
+                        for a in archives:
+                            if len(entries) >= MAX_ENTRIES:
+                                truncated = True
+                                break
+                            entries.append({"path": str(a), "name": a.name, "kind": "archive"})
+            except OSError:
+                continue
 
-    for child in children:
-        try:
-            if child.is_file():
-                if child.suffix.lower() in ARCHIVE_EXTENSIONS and not _is_continuation(child.name):
-                    entries.append({"path": str(child), "name": child.name, "kind": "archive"})
-            elif child.is_dir():
-                if _has_audio(child):
-                    entries.append({"path": str(child), "name": child.name, "kind": "folder"})
-                else:
-                    for a in _archives_in(child):
-                        entries.append({"path": str(a), "name": a.name, "kind": "archive"})
-        except OSError:
-            continue
+        # Folder pointed straight at a single extracted CD (loose audio at the
+        # top level, no addable children): treat the whole folder as one entry.
+        if not entries and _scan_dir(root)[0]:
+            entries.append({"path": str(root), "name": root.name, "kind": "folder"})
+        return entries, truncated
 
-    # Folder pointed straight at a single extracted CD (loose audio at the top
-    # level, no addable children): treat the whole folder as one entry.
-    if not entries and _has_audio(root):
-        entries.append({"path": str(root), "name": root.name, "kind": "folder"})
-
-    return {"folder": str(root), "entries": entries}
+    entries, truncated = await asyncio.to_thread(_enumerate)
+    return {"folder": str(root), "entries": entries, "truncated": truncated}
 
 
 async def _refetch_metadata(item_id: int, product_code: str):

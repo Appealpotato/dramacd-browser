@@ -5673,13 +5673,16 @@ const app = createApp({
             }
             // Re-fetch tracks for the focused item so the Track Selection list
             // reflects any transcripts/translations created elsewhere (Player,
-            // another session, etc.) since this tab was last opened. If we have
-            // no tracks yet (e.g. arrived via Player), do the FULL load so the
-            // list + selection populate; otherwise a soft refresh keeps counts
-            // current without clobbering the user's selection.
+            // another session, etc.) since this tab was last opened. Do the
+            // FULL load when the loaded tracks aren't this item's (arrived via
+            // Player, or the player item changed since the last Atelier visit)
+            // — a soft refresh there would keep showing the previous CD's
+            // selection/runs. Otherwise the soft refresh keeps counts current
+            // without clobbering the user's selection.
             if (pipelineSelectedItemId.value) {
                 try {
-                    if (!pipelineTracks.value || pipelineTracks.value.length === 0) {
+                    if (!pipelineTracks.value || pipelineTracks.value.length === 0
+                        || pipelineTracksItemId !== pipelineSelectedItemId.value) {
                         await loadPipelineTracksForItem();
                     } else {
                         await refreshPipelineTrackList();
@@ -6394,11 +6397,19 @@ const app = createApp({
             await purgeItemWorkspace();
         }
 
+        // Which item the rows in pipelineTracks were loaded for — compared by
+        // switchToWorkshopTab so a stale list from another CD triggers a full
+        // reload instead of a soft refresh. Plain lets: never rendered.
+        let pipelineTracksItemId = null;
+        let pipelineTracksLoading = false;
+
         async function loadPipelineTracksForItem() {
             if (!pipelineSelectedItemId.value) {
                 pipelineLoadError.value = 'Enter a valid item id';
                 return;
             }
+            if (pipelineTracksLoading) return; // double-tap re-entrancy guard
+            pipelineTracksLoading = true;
             pipelineBusy.value = true;
             pipelineLoadError.value = '';
             const previousTrackId = pipelineTrackId.value;
@@ -6418,6 +6429,7 @@ const app = createApp({
                     return;
                 }
                 pipelineTracks.value = Array.isArray(data.tracks) ? data.tracks : [];
+                pipelineTracksItemId = pipelineSelectedItemId.value;
                 if (pipelineTracks.value.length) {
                     // Preserve the user's previously-selected track if it's
                     // still in the list (helps with state restore on refresh
@@ -6438,6 +6450,7 @@ const app = createApp({
                 pipelineLoadError.value = 'Failed to load tracks';
                 console.error('Failed to load tracks:', err);
             } finally {
+                pipelineTracksLoading = false;
                 pipelineBusy.value = false;
             }
         }
@@ -6454,6 +6467,7 @@ const app = createApp({
                 const data = await resp.json();
                 if (Array.isArray(data.tracks)) {
                     pipelineTracks.value = data.tracks;
+                    pipelineTracksItemId = pipelineSelectedItemId.value;
                 }
             } catch (err) {
                 console.error('Soft refresh failed:', err);
@@ -7985,6 +7999,10 @@ const app = createApp({
 
             playerItemId.value = selectedItem.value.id;
             selectedWorkshopItem.value = selectedItem.value;
+            // Keep Atelier focused on the same CD (matches openItemInPlayer) —
+            // otherwise tapping Atelier after this shows the PREVIOUS item's
+            // tracks.
+            pipelineSelectedItemId.value = selectedItem.value.id;
             activeTab.value = 'player';
             closeDetail();
 
@@ -9188,32 +9206,42 @@ const app = createApp({
             playerTheme.value = theme;
         }
 
-        // Codecs that carry a reliable duration header and play natively on
-        // mobile — these never need the AAC transcode (and never drift).
-        const _LOSSY_CODEC_RE = /^(mp3|aac|m4a|mp4|ogg|opus)$/i;
-        function _isLosslessCodec(codec) {
+        // Codecs that play natively on mobile WITH a reliable duration header
+        // — these never need the AAC transcode (and never drift). Deliberately
+        // EXCLUDES ogg/opus: iOS Safari can't play them at all, so on mobile
+        // they go through the AAC transcode exactly like FLAC does.
+        const _MOBILE_NATIVE_CODEC_RE = /^(mp3|aac|m4a|mp4)$/i;
+        function _isMobileNativeCodec(codec) {
             const c = String(codec || '').toLowerCase();
-            return !!c && !_LOSSY_CODEC_RE.test(c);
+            return !!c && _MOBILE_NATIVE_CODEC_RE.test(c);
         }
-        // For mobile playback of a lossless (FLAC/WAV) track, prefer a lossy
-        // sibling of the SAME recording + variant if one was extracted: it
-        // plays instantly with correct sync and needs no transcode. Returns
-        // the id of the track whose audio file we should actually stream.
+        // Which mobile-native sibling to prefer: AAC family first (best
+        // quality-per-bit, plays everywhere), then MP3.
+        const _MOBILE_CODEC_PREF = { m4a: 0, mp4: 1, aac: 2, mp3: 3 };
+        function _mobileCodecRank(codec) {
+            const r = _MOBILE_CODEC_PREF[String(codec || '').toLowerCase()];
+            return r === undefined ? 99 : r;
+        }
+        // For mobile playback of a track that isn't mobile-native (FLAC/WAV/
+        // OGG/…), prefer a mobile-native sibling of the SAME recording +
+        // variant if one was extracted: it plays instantly with correct sync
+        // and needs no transcode. Returns the id of the track whose audio
+        // file we should actually stream.
         function _resolveMobileAudioTrackId(trackId) {
             if (!isMobileClient()) return trackId;
             const tracks = playerAvailableTracks.value || [];
             const picked = tracks.find(t => t.id === trackId);
-            if (!picked || !_isLosslessCodec(picked.codec)) return trackId;
+            if (!picked || _isMobileNativeCodec(picked.codec)) return trackId;
             const group = (playerAvailableGroups.value || []).find(
                 g => g.tracks.some(t => t.id === trackId)
             );
             if (!group) return trackId;
             const pickedVariant = (group.tracks.find(t => t.id === trackId) || {})._variant;
-            // Lowest _codecRank wins among same-variant lossy siblings (mp3
-            // outranks aac/ogg etc. per CODEC_RANK), matching desktop ordering.
             const sibling = group.tracks
-                .filter(t => !_isLosslessCodec(t.codec) && (t._variant || 'sfx') === (pickedVariant || 'sfx'))
-                .sort((a, b) => _codecRank(a.codec) - _codecRank(b.codec))[0];
+                .filter(t => _isMobileNativeCodec(t.codec)
+                    && t.file_exists !== false
+                    && (t._variant || 'sfx') === (pickedVariant || 'sfx'))
+                .sort((a, b) => _mobileCodecRank(a.codec) - _mobileCodecRank(b.codec))[0];
             return sibling ? sibling.id : trackId;
         }
 
@@ -9301,10 +9329,21 @@ const app = createApp({
                 // is what stops mobile subtitle drift. Setting src + load() now
                 // (at selection, before play) also warms that transcode cache.
                 const audioTrackId = _resolveMobileAudioTrackId(trackId);
-                const playTrack = (playerAvailableTracks.value || []).find(t => t.id === audioTrackId);
-                const needsTranscode = isMobileClient() && _isLosslessCodec(playTrack?.codec);
+                // Fall back to the row we just fetched: playerAvailableTracks
+                // may not be populated yet (openTrackInPlayer doesn't await
+                // loadPlayerItemTracks) and a mobile FLAC streamed raw through
+                // that window would silently reintroduce the drift bug.
+                const playTrack = (playerAvailableTracks.value || []).find(t => t.id === audioTrackId) || track;
+                const needsTranscode = isMobileClient() && !_isMobileNativeCodec(playTrack?.codec);
                 const audioBase = `/api/pipeline/player/audio/${audioTrackId}`;
                 const audioUrl = needsTranscode ? `${audioBase}?format=aac` : audioBase;
+                if (needsTranscode) {
+                    // Fire-and-forget prewarm: unlike the <audio> element's own
+                    // load (which Safari freely aborts), this request runs the
+                    // transcode to completion, and the server dedups it against
+                    // the real ?format=aac request.
+                    fetch(`${audioBase}/prewarm`).catch(() => {});
+                }
                 if (playerAudioElement.value) {
                     playerAudioElement.value.src = audioUrl;
                     playerAudioElement.value.load();

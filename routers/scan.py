@@ -32,12 +32,13 @@ async def _auto_index_loose_item(item_id: int, files: list) -> int:
     'extract' step that would only re-discover files already sitting on disk.
 
     Returns the number of tracks indexed, or 0 if the item isn't a pure loose-
-    audio folder, or its tracks are already indexed AND still resolve on disk.
-    If existing tracks are ALL missing on disk (folder renamed / moved / files
-    re-encoded) while the item's current files DO resolve, the stale rows are
-    re-indexed from the valid paths — self-healing after a rename. Best-effort:
-    never raises into the scan loop. Relies on the same in-place indexer the
-    extract job uses, so nothing is copied into the pipeline workspace."""
+    audio folder, or its indexed tracks already match the current files. When
+    the sets differ (folder renamed/moved, files added or removed, item
+    re-pointed at another folder), the tracks are re-indexed from the current
+    paths. Renamed/moved files keep their transcripts: the DB upsert remaps
+    rows by filename instead of delete+insert. Best-effort: never raises into
+    the scan loop. Relies on the same in-place indexer the extract job uses,
+    so nothing is copied into the pipeline workspace."""
     audio_paths = []
     for f in files or []:
         try:
@@ -54,19 +55,22 @@ async def _auto_index_loose_item(item_id: int, files: list) -> int:
     try:
         existing = await db.get_pipeline_tracks(item_id)
         if existing:
-            # Leave indexed items alone — UNLESS every track is now missing on
-            # disk. Then the stored paths are stale (the item was renamed/moved
-            # after indexing) and we re-index from the current, valid files.
-            any_on_disk = any(
-                bool((t.get("track_path") or "").strip())
-                and Path(t["track_path"]).is_file()
+            # Re-index only when the indexed paths no longer match the item's
+            # current files (rename, move, added/removed tracks, re-point).
+            # Identical sets mean nothing to do — skip the per-file probes.
+            def _norm(s) -> str:
+                return str(s).strip().lower()
+            existing_set = {
+                _norm(t["track_path"])
                 for t in existing
-            )
-            if any_on_disk:
+                if (t.get("track_path") or "").strip()
+            }
+            current_set = {_norm(p) for p in audio_paths}
+            if existing_set == current_set:
                 return 0
             logger.info(
-                f"Auto-index: item {item_id} has {len(existing)} stale track(s) "
-                "(none on disk) — re-indexing from current files"
+                f"Auto-index: item {item_id} track paths changed "
+                f"({len(existing)} indexed vs {len(audio_paths)} on disk) — re-indexing"
             )
         from pipeline.extractor import _index_loose_tracks
         tracks = _index_loose_tracks(item_id, audio_paths)

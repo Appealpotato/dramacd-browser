@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -496,7 +497,13 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
 
     Pass ``dry_run=false`` to actually move files."""
     await _ensure_pipeline_enabled()
+    from config import PIPELINE_EXTRACT_DIR
     from pipeline.extractor import try_recover_mojibake
+
+    try:
+        workspace_root = PIPELINE_EXTRACT_DIR.resolve()
+    except OSError:
+        workspace_root = PIPELINE_EXTRACT_DIR
 
     page = await db.get_all_items(limit=100000, offset=0)
     items = page.get("items") or []
@@ -505,6 +512,7 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
     # rewritten, plus the cumulative rename ladder for each.
     track_plans: list[dict] = []
     rename_pairs: dict[str, tuple[Path, Path]] = {}  # key: str(old) → (old, new)
+    skipped_outside_workspace = 0
 
     for it in items:
         tracks = await db.get_pipeline_tracks(int(it["id"]))
@@ -513,6 +521,15 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
             if not old:
                 continue
             old_path = Path(old)
+            # Loose in-place tracks point at the user's ORIGINAL library files.
+            # Mojibake recovery is strictly for workspace extractions (where WE
+            # produced the mangled names) — never rename anything outside the
+            # workspace, and never trust the heuristic on the user's own naming.
+            try:
+                old_path.resolve().relative_to(workspace_root)
+            except (ValueError, OSError):
+                skipped_outside_workspace += 1
+                continue
             old_parts = list(old_path.parts)
             new_parts: list[str] = []
             cum_old = None
@@ -564,6 +581,7 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
             "dry_run": True,
             "track_candidates": len(track_plans),
             "rename_steps": len(pairs),
+            "skipped_outside_workspace": skipped_outside_workspace,
             "preview_renames": [{"old": str(o), "new": str(n)} for (o, n) in pairs[:20]],
             "preview_tracks": track_plans[:20],
         }
@@ -610,6 +628,7 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
         "renames_failed": failed,
         "tracks_updated": db_updated,
         "tracks_skipped": db_skipped,
+        "skipped_outside_workspace": skipped_outside_workspace,
     }
 
 
@@ -1255,8 +1274,17 @@ def _resolve_ffmpeg() -> str | None:
     return _find_binary(["ffmpeg"], env_var="DRAMACD_FFMPEG_PATH")
 
 
+# One transcode per track at a time: concurrent cold requests for the same
+# FLAC (two devices, a prewarm racing the real request, mobile <audio>
+# aborting and retrying) would otherwise each run a full `-threads 0` ffmpeg
+# pass. Losers block on the winner's lock, then hit the warm cache re-check.
+_transcode_locks: dict[int, "threading.Lock"] = {}
+_transcode_locks_guard = threading.Lock()
+_transcode_tmp_swept = False
+
+
 def _ensure_aac_cache(src: Path, track_id: int) -> Path:
-    """Transcode `src` to AAC-in-MP4 (.m4a) at 192k/48kHz, cached at
+    """Transcode `src` to AAC-in-MP4 (.m4a) at 128k/48kHz, cached at
     data/pipeline/transcoded/{track_id}.m4a. MP4 container is required
     instead of raw ADTS: ADTS has no duration header, so mobile browsers
     estimate duration from average bitrate and advance currentTime against
@@ -1272,47 +1300,76 @@ def _ensure_aac_cache(src: Path, track_id: int) -> Path:
     if cache_file.exists() and cache_file.stat().st_mtime >= src_mtime:
         return cache_file
 
-    ffmpeg = _resolve_ffmpeg()
-    if not ffmpeg:
-        raise HTTPException(
-            status_code=503,
-            detail="AAC transcode requires ffmpeg. Install ffmpeg or set DRAMACD_FFMPEG_PATH.",
-        )
+    global _transcode_tmp_swept
+    with _transcode_locks_guard:
+        # First cold transcode since startup: sweep tmp files orphaned by a
+        # crashed/killed previous run. Safe here — no per-track lock has been
+        # handed out yet, so nothing in this process is mid-transcode.
+        if not _transcode_tmp_swept:
+            _transcode_tmp_swept = True
+            for orphan in cache_dir.glob("*.tmp.m4a"):
+                try:
+                    orphan.unlink()
+                except OSError:
+                    pass
+        lock = _transcode_locks.setdefault(track_id, threading.Lock())
 
-    import subprocess
-    import uuid
-    # Unique temp name so two concurrent cold transcodes of the same track
-    # (e.g. two devices, or a prewarm racing a real request) can't clobber a
-    # shared tmp file. Both produce a complete file; the last replace() wins.
-    tmp_file = cache_file.with_suffix(f".{uuid.uuid4().hex}.tmp.m4a")
-    # 128k AAC: transparent for speech (drama CDs are voice), and noticeably
-    # faster to encode + smaller to download than 192k. `-threads 0` lets
-    # ffmpeg use all cores. `+faststart` is load-bearing for mobile sync —
-    # it puts the moov atom (with real duration) up front; do NOT remove it.
-    cmd = [
-        ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-        "-threads", "0",
-        "-i", str(src),
-        "-vn",
-        "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
-        "-movflags", "+faststart",
-        "-f", "ipod",
-        str(tmp_file),
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=600)
-    except subprocess.CalledProcessError as exc:
-        if tmp_file.exists():
-            tmp_file.unlink()
-        stderr = (exc.stderr or b"").decode(errors="replace")[:500]
-        raise HTTPException(status_code=500, detail=f"ffmpeg transcode failed: {stderr}")
-    except subprocess.TimeoutExpired:
-        if tmp_file.exists():
-            tmp_file.unlink()
-        raise HTTPException(status_code=504, detail="ffmpeg transcode timed out")
+    with lock:
+        # Re-check: the winner of a concurrent race already built the cache
+        # while we waited on the lock.
+        if cache_file.exists() and cache_file.stat().st_mtime >= src_mtime:
+            return cache_file
 
-    tmp_file.replace(cache_file)
-    return cache_file
+        ffmpeg = _resolve_ffmpeg()
+        if not ffmpeg:
+            raise HTTPException(
+                status_code=503,
+                detail="AAC transcode requires ffmpeg. Install ffmpeg or set DRAMACD_FFMPEG_PATH.",
+            )
+
+        import subprocess
+        import uuid
+        # Unique temp name so a tmp left by a crashed run can never be confused
+        # with ours; the finally-unlink below keeps the cache dir free of them.
+        tmp_file = cache_file.with_suffix(f".{uuid.uuid4().hex}.tmp.m4a")
+        # 128k AAC: transparent for speech (drama CDs are voice), and noticeably
+        # faster to encode + smaller to download than 192k. `-threads 0` lets
+        # ffmpeg use all cores. `+faststart` is load-bearing for mobile sync —
+        # it puts the moov atom (with real duration) up front; do NOT remove it.
+        cmd = [
+            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+            "-threads", "0",
+            "-i", str(src),
+            "-vn",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+            "-movflags", "+faststart",
+            "-f", "ipod",
+            str(tmp_file),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=600)
+            try:
+                tmp_file.replace(cache_file)
+            except PermissionError:
+                # Windows: another client is mid-stream on the existing (stale
+                # but valid) cache file, so it can't be replaced right now.
+                # Serve that one; the next cold request retries the swap.
+                if cache_file.exists():
+                    return cache_file
+                raise
+            return cache_file
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or b"").decode(errors="replace")[:500]
+            raise HTTPException(status_code=500, detail=f"ffmpeg transcode failed: {stderr}")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=504, detail="ffmpeg transcode timed out")
+        finally:
+            # No-op after a successful replace; cleans up after every failure
+            # path (ffmpeg error, timeout, missing binary, failed swap).
+            try:
+                tmp_file.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @router.get("/player/audio/{track_id}")
@@ -1332,7 +1389,9 @@ async def serve_track_audio(track_id: int, format: str | None = Query(None)):
         raise HTTPException(status_code=404, detail="Track path not available")
 
     audio_file = Path(track_path)
-    if not audio_file.is_file():
+    # Threaded stat: loose tracks can live on a sleeping external HDD where a
+    # cold stat blocks for seconds — keep it off the event loop.
+    if not await asyncio.to_thread(audio_file.is_file):
         raise HTTPException(status_code=404, detail="Audio file not found on disk")
 
     if format == "aac":
@@ -1374,10 +1433,10 @@ async def serve_track_audio(track_id: int, format: str | None = Query(None)):
 @router.get("/player/audio/{track_id}/prewarm")
 async def prewarm_track_audio(track_id: int):
     """Build the AAC cache for a track ahead of playback without streaming it.
-    The player calls this fire-and-forget when a FLAC track (with no lossy
-    sibling) is selected on mobile, so the transcode is already done by the
-    time the user presses play and the real `?format=aac` request lands on a
-    warm cache. Returns immediately with the cache state."""
+    The player calls this fire-and-forget when it selects a track that needs
+    the transcode on mobile: unlike the <audio> element's own load (which
+    Safari freely aborts), this request runs the transcode to completion, and
+    the per-track lock dedups it against the real `?format=aac` request."""
     track = await db.get_pipeline_track(track_id)
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
@@ -1385,7 +1444,7 @@ async def prewarm_track_audio(track_id: int):
     if not track_path:
         raise HTTPException(status_code=404, detail="Track path not available")
     audio_file = Path(track_path)
-    if not audio_file.is_file():
+    if not await asyncio.to_thread(audio_file.is_file):
         raise HTTPException(status_code=404, detail="Audio file not found on disk")
     try:
         cached = await asyncio.to_thread(_ensure_aac_cache, audio_file, track_id)
@@ -1722,8 +1781,11 @@ async def purge_workspace_orphans(_auth=Depends(require_api_key)):
 
 @router.post("/items/{item_id}/purge-workspace")
 async def purge_item_workspace(item_id: int, _auth=Depends(require_api_key)):
-    """Delete the extracted audio for one item. Tracks rows are also cleared
-    (transcripts/translations stay; their FKs go to NULL on tracks delete)."""
+    """Delete the extracted audio for one item. Track rows for workspace
+    extractions are cleared with it (their transcripts/translations CASCADE
+    away — re-extracting starts fresh). Loose in-place tracks, whose audio
+    lives OUTSIDE the workspace and isn't deleted here, keep their rows —
+    clearing them would destroy transcripts for files still on disk."""
     await _ensure_pipeline_enabled()
     item = await db.get_item(item_id)
     if not item:
@@ -1745,6 +1807,11 @@ async def purge_item_workspace(item_id: int, _auth=Depends(require_api_key)):
     if candidate.exists():
         extract_dirs.add(candidate)
 
+    try:
+        workspace_root = PIPELINE_EXTRACT_DIR.resolve()
+    except OSError:
+        workspace_root = PIPELINE_EXTRACT_DIR
+
     deleted: list[dict] = []
     failed: list[dict] = []
     bytes_freed = 0
@@ -1756,7 +1823,6 @@ async def purge_item_workspace(item_id: int, _auth=Depends(require_api_key)):
             resolved = d
         # Don't delete files outside the workspace root
         try:
-            workspace_root = PIPELINE_EXTRACT_DIR.resolve()
             resolved.relative_to(workspace_root)
         except (ValueError, OSError):
             continue
@@ -1774,8 +1840,32 @@ async def purge_item_workspace(item_id: int, _auth=Depends(require_api_key)):
         except OSError as exc:
             failed.append({"path": str(resolved), "error": str(exc)})
 
-    # Clear track rows so the item shows as needing re-extraction.
-    cleared_tracks = await db.replace_pipeline_tracks_for_item(item_id, [])
+    # Clear track rows so the item shows as needing re-extraction — but KEEP
+    # rows for loose in-place tracks (audio outside the workspace): their
+    # files weren't deleted above, and dropping the rows would CASCADE away
+    # transcripts/translations for audio that's still on disk.
+    kept_loose: list[dict] = []
+    for t in tracks:
+        tp = (t.get("track_path") or "").strip()
+        if not tp:
+            continue
+        try:
+            Path(tp).resolve().relative_to(workspace_root)
+        except (ValueError, OSError):
+            kept_loose.append({
+                "archive_path": t.get("archive_path"),
+                "extract_root": t.get("extract_root"),
+                "track_path": tp,
+                "track_index": t.get("track_index", 0),
+                "title": t.get("title"),
+                "duration_seconds": t.get("duration_seconds"),
+                "codec": t.get("codec"),
+                "sample_rate": t.get("sample_rate"),
+                "channels": t.get("channels"),
+                "status": t.get("status", "indexed"),
+                "error": t.get("error"),
+            })
+    tracks_now = await db.replace_pipeline_tracks_for_item(item_id, kept_loose)
 
     return {
         "status": "ok",
@@ -1784,5 +1874,6 @@ async def purge_item_workspace(item_id: int, _auth=Depends(require_api_key)):
         "failed": failed,
         "bytes_freed": bytes_freed,
         "tracks_cleared_was": len(tracks),
-        "tracks_now": cleared_tracks,
+        "tracks_kept_loose": len(kept_loose),
+        "tracks_now": tracks_now,
     }

@@ -827,8 +827,18 @@ def _index_loose_tracks(item_id: int, audio_files: list[Path], start_index: int 
     audio is never duplicated on disk. Both deletion paths (item delete +
     purge-workspace) only remove dirs inside PIPELINE_EXTRACT_DIR, so the user's
     source files are safe from those operations."""
+    # Same AppleDouble filtering as _index_tracks_from_dir: a folder unzipped
+    # on/from a Mac carries __MACOSX/ and ._* resource-fork phantoms with audio
+    # suffixes that would index as broken duplicate tracks. Keep the fallback
+    # so a (pathological) junk-only folder still indexes rather than going empty.
+    candidates = sorted(audio_files)
+    non_junk = [
+        p for p in candidates
+        if "__MACOSX" not in p.parts and not p.name.startswith("._")
+    ]
+    audio_files = non_junk if non_junk else candidates
     tracks = []
-    for idx, path in enumerate(sorted(audio_files), start=start_index):
+    for idx, path in enumerate(audio_files, start=start_index):
         probe, probe_error = _probe_audio_metadata(path)
         tracks.append(
             {
@@ -885,15 +895,6 @@ async def run_extraction_job(job_id: int):
 
     if force and extract_root.exists():
         shutil.rmtree(extract_root, ignore_errors=True)
-    extract_root.mkdir(parents=True, exist_ok=True)
-
-    # Reuse existing extraction unless --force: skip re-extracting archives
-    # that already produced an audio-bearing subfolder.
-    has_existing_audio = any(
-        p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
-        for p in extract_root.rglob("*")
-    )
-    reused_existing = has_existing_audio and not force
 
     scan_paths = await db.get_scan_paths()
     archives = _resolve_archives_for_item(item, scan_paths)
@@ -913,6 +914,32 @@ async def run_extraction_job(job_id: int):
     # duplicated on disk. Only real archives go through extraction.
     loose_audio = [a for a in archives if a.suffix.lower() in AUDIO_EXTENSIONS]
     real_archives = [a for a in archives if a.suffix.lower() not in AUDIO_EXTENSIONS]
+    if real_archives and loose_audio:
+        # An item with a real archive treats the archive as canonical. Stray
+        # loose audio matching the same product code under the scan roots would
+        # otherwise index in place ALONGSIDE the extracted tracks — a doubled
+        # tracklist.
+        await db.append_job_event(
+            job_id, "info",
+            f"Ignoring {len(loose_audio)} loose audio file(s) — item has real archive(s)",
+            {"ignored": [str(a) for a in loose_audio[:10]]},
+        )
+        loose_audio = []
+        archives = real_archives
+
+    # A pure loose-audio item never touches the workspace — don't create (or
+    # keep recreating) an empty PIPELINE_EXTRACT_DIR/<CODE> dir for it that
+    # would only show up as an orphan.
+    if real_archives:
+        extract_root.mkdir(parents=True, exist_ok=True)
+
+    # Reuse existing extraction unless --force: skip re-extracting archives
+    # that already produced an audio-bearing subfolder.
+    has_existing_audio = extract_root.exists() and any(
+        p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
+        for p in extract_root.rglob("*")
+    )
+    reused_existing = has_existing_audio and not force
 
     # If a source archive is NEWER than what we extracted, the archive changed since the
     # last run (e.g. the merged blob was replaced with proper split tracks). Reusing the
@@ -929,8 +956,10 @@ async def run_extraction_job(job_id: int):
                 (p.stat().st_mtime for p in [extract_root, *extract_root.rglob("*")] if p.is_dir()),
                 default=0.0,
             )
+            # Only REAL archives count: a recently-touched loose audio file
+            # isn't a changed archive and must not force a workspace re-extract.
             newest_archive = max(
-                (a.stat().st_mtime for a in archives if a.exists()),
+                (a.stat().st_mtime for a in real_archives if a.exists()),
                 default=0.0,
             )
             if newest_archive > extracted_when:
@@ -980,7 +1009,11 @@ async def run_extraction_job(job_id: int):
             completed += len(loose_audio)
             await db.update_job(job_id, completed=completed, current=None)
 
-    tracks = _index_tracks_from_dir(item_id=item_id, extract_root=extract_root, archives=real_archives)
+    tracks = (
+        _index_tracks_from_dir(item_id=item_id, extract_root=extract_root, archives=real_archives)
+        if extract_root.exists()
+        else []
+    )
     if loose_audio:
         tracks += _index_loose_tracks(item_id, loose_audio, start_index=len(tracks) + 1)
     track_count = await db.replace_pipeline_tracks_for_item(item_id, tracks)

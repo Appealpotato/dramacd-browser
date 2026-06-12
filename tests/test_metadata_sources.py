@@ -214,6 +214,23 @@ class PokedoraParseTests(unittest.TestCase):
         ))
         self.assertFalse(self.source.matches_url("https://www.dlsite.com/foo"))
 
+    def test_match_url_param_order(self):
+        # `watch_product_id` contains `product_id` as a substring — the regex
+        # must anchor on a param BOUNDARY or it captures the wrong product.
+        m = self.source._url_re.search(
+            "https://pokedora.com/products/detail.php?watch_product_id=85510&product_id=99999"
+        )
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1), "99999")
+        m = self.source._url_re.search(
+            "https://pokedora.com/products/detail.php?product_id=85510&watch_product_id=85510&age_check=1"
+        )
+        self.assertEqual(m.group(1), "85510")
+        # No real product_id param at all → no match (would fetch garbage).
+        self.assertFalse(self.source.matches_url(
+            "https://pokedora.com/products/detail.php?related_product_id=11111"
+        ))
+
     def test_parse_product(self):
         meta = self.source.parse_product(
             fixture("pokedora_product.html"),
