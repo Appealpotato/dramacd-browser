@@ -5661,14 +5661,29 @@ const app = createApp({
         async function switchToWorkshopTab() {
             activeTab.value = 'pipeline';
             await loadPipelineStatus();
+            // Atelier tracks the item via `pipelineSelectedItemId`, but the user
+            // may have reached the CD through the Player (which only sets
+            // `playerItemId`). Adopt that item so the Track Selection list isn't
+            // empty just because they came in via Player rather than the wrench.
+            if (!pipelineSelectedItemId.value) {
+                const fallbackId = playerItemId.value
+                    || (selectedWorkshopItem.value && selectedWorkshopItem.value.id)
+                    || null;
+                if (fallbackId) pipelineSelectedItemId.value = fallbackId;
+            }
             // Re-fetch tracks for the focused item so the Track Selection list
             // reflects any transcripts/translations created elsewhere (Player,
-            // another session, etc.) since this tab was last opened. Without
-            // this the cached transcript_run_count goes stale and the
-            // "transcribed" list looks empty even when the data exists.
+            // another session, etc.) since this tab was last opened. If we have
+            // no tracks yet (e.g. arrived via Player), do the FULL load so the
+            // list + selection populate; otherwise a soft refresh keeps counts
+            // current without clobbering the user's selection.
             if (pipelineSelectedItemId.value) {
                 try {
-                    await refreshPipelineTrackList();
+                    if (!pipelineTracks.value || pipelineTracks.value.length === 0) {
+                        await loadPipelineTracksForItem();
+                    } else {
+                        await refreshPipelineTrackList();
+                    }
                     if (pipelineTrackId.value) {
                         try { await loadPipelineRuns(); } catch (_) {}
                     }
