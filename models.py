@@ -256,6 +256,9 @@ class WhisperSettingsUpdateRequest(BaseModel):
     beam_size: Optional[int] = None
     condition_on_previous_text: Optional[bool] = None
     preferred_variant: Optional[str] = None
+    # Word-level alignment: slower, but refines segment boundaries and stores
+    # per-word timings in segment meta (future word-by-word player highlight).
+    word_timestamps: Optional[bool] = None
 
 
 TOKUTEN_KINDS = {"audio", "book", "image", "misc"}

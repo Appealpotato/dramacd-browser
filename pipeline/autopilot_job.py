@@ -170,9 +170,13 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
         _record_stage(stage, status="skipped")
     else:
         item_now = await db.get_item(item_id) or {}
+        # Non-empty isn't enough: a model that echoed the Japanese back left
+        # _en columns filled with untranslated text, and this check used to
+        # skip the stage forever because of it.
+        from text_cleaning import looks_translated_to_english
         already_translated = bool(
-            str(item_now.get("title_en") or "").strip()
-            and str(item_now.get("description_en") or "").strip()
+            looks_translated_to_english(item_now.get("title_en"))
+            and looks_translated_to_english(item_now.get("description_en"))
         )
         if already_translated and not metadata.get("force_metadata", False):
             _record_stage(stage, status="skipped", reason="already_translated")

@@ -52,6 +52,15 @@ AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".
 # Whisper transcription settings
 WHISPER_MODEL = os.environ.get("DRAMACD_WHISPER_MODEL", "small")
 WHISPER_DEVICE = "cuda" if os.environ.get("DRAMACD_WHISPER_DEVICE", "auto") == "auto" else os.environ.get("DRAMACD_WHISPER_DEVICE", "cpu")
+# Batched decoding (faster-whisper BatchedInferencePipeline): ~3x faster on
+# long audio when VAD is enabled, but benchmarks on real drama-CD audio show
+# it merges VAD chunks aggressively and can swallow whole dialogue passages
+# (86s of speech collapsed into one segment in testing). OFF by default —
+# opt in via env only for content where speed matters more than fidelity.
+try:
+    WHISPER_BATCH_SIZE = max(0, int(os.environ.get("DRAMACD_WHISPER_BATCH_SIZE", "0")))
+except ValueError:
+    WHISPER_BATCH_SIZE = 0
 FFMPEG_PATH = os.environ.get("DRAMACD_FFMPEG_PATH", "").strip() or None
 
 # Translation provider settings

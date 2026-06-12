@@ -5,16 +5,53 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Optional
 
-import torch
-from config import FFMPEG_PATH
+from config import FFMPEG_PATH, WHISPER_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
 # Track temp files to clean up on exit
 _temp_files = []
+
+# Warm model cache: loading large-v2 (~3GB) from disk to GPU takes tens of
+# seconds, and we used to pay that on EVERY job because the model lived on
+# the transcriber instance. One slot is enough — keeping two large models
+# resident would blow VRAM, and model switches are rare. Keyed by
+# (model_name, device, compute_type); a different key evicts the old model.
+_model_cache_lock = threading.Lock()
+_model_cache_key: tuple | None = None
+_model_cache_value = None
+
+
+def _get_cached_model(model_name: str, device: str, compute_type: str):
+    """Load (or reuse) a WhisperModel. Thread-safe; CTranslate2 models are
+    safe to share across concurrent transcribe() calls."""
+    global _model_cache_key, _model_cache_value
+    key = (model_name, device, compute_type)
+    with _model_cache_lock:
+        if _model_cache_key == key and _model_cache_value is not None:
+            logger.debug(f"Reusing cached Whisper model {key}")
+            return _model_cache_value
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            raise RuntimeError("faster-whisper not installed. Install with: pip install faster-whisper")
+        if _model_cache_value is not None:
+            logger.info(f"Evicting cached Whisper model {_model_cache_key} for {key}")
+            _model_cache_key = None
+            _model_cache_value = None
+        logger.info(f"Loading Faster Whisper model '{model_name}' on device '{device}' with compute_type '{compute_type}'")
+        try:
+            model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        except Exception as e:
+            raise RuntimeError(f"Failed to load Faster Whisper model '{model_name}': {e}")
+        logger.info("Faster Whisper model loaded successfully")
+        _model_cache_key = key
+        _model_cache_value = model
+        return model
 
 
 def _cleanup_temp_files():
@@ -51,6 +88,8 @@ class WhisperTranscriber:
         beam_size: int = 5,
         condition_on_previous_text: bool = True,
         hotwords: str | None = None,
+        word_timestamps: bool = False,
+        batch_size: int | None = None,
     ):
         self.model_name = model_name
         self._device, self._compute_type = self._detect_device()
@@ -63,29 +102,39 @@ class WhisperTranscriber:
         # we run condition_on_previous_text=False). Feeding the CD title fixes
         # exactly the words Whisper can't guess: 睡眠姦, 孕ませたい, names.
         self.hotwords = str(hotwords).strip() if hotwords else None
+        # Word-level alignment: +30-50% decode time, but refines segment
+        # boundaries and yields per-word timings (stored in segment meta for
+        # the player). Off by default — speed mode.
+        self.word_timestamps = bool(word_timestamps)
+        # Batched decoding (BatchedInferencePipeline): big speedup on long
+        # audio, requires VAD to chunk the input. 0/1 = sequential.
+        self.batch_size = WHISPER_BATCH_SIZE if batch_size is None else max(0, int(batch_size))
 
     @staticmethod
     def _detect_device() -> tuple[str, str]:
-        """Detect CUDA availability, prefer GPU. Returns (device, compute_type)."""
-        if torch.cuda.is_available():
-            return ("cuda", "float16")  # GPU with FP16 for speed
+        """Detect CUDA availability, prefer GPU. Returns (device, compute_type).
+
+        Asks CTranslate2 (the actual inference engine) instead of torch: a
+        CPU-only torch build used to silently force Whisper onto the CPU even
+        when the GPU was fine, because torch.cuda.is_available() was the gate."""
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                return ("cuda", "float16")  # GPU with FP16 for speed
+        except Exception as e:
+            logger.warning(f"CUDA detection failed, falling back to CPU: {e}")
         return ("cpu", "int8")  # CPU with int8 for memory efficiency
 
     def _load_model(self):
-        """Lazy-load Faster Whisper model on first use."""
+        """Attach the (cached) Faster Whisper model on first use."""
         if self._model is not None:
             return
+        self._model = _get_cached_model(self.model_name, self._device, self._compute_type)
 
-        try:
-            from faster_whisper import WhisperModel
-
-            logger.info(f"Loading Faster Whisper model '{self.model_name}' on device '{self._device}' with compute_type '{self._compute_type}'")
-            self._model = WhisperModel(self.model_name, device=self._device, compute_type=self._compute_type)
-            logger.info(f"Faster Whisper model loaded successfully")
-        except ImportError:
-            raise RuntimeError("faster-whisper not installed. Install with: pip install faster-whisper")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load Faster Whisper model '{self.model_name}': {e}")
+    def _uses_batching(self) -> bool:
+        # The batched pipeline VAD-chunks the audio; without VAD it has
+        # nothing to batch over, so fall back to sequential decoding.
+        return self.batch_size > 1 and self.vad_filter
 
     @staticmethod
     def _prepare_ffmpeg() -> None:
@@ -166,34 +215,64 @@ class WhisperTranscriber:
         segment_count = 0
 
         try:
-            # Faster Whisper returns a generator of segments with real-time progress
-            # transcribe() returns (segments_generator, info)
-            segments_generator, info = self._model.transcribe(
-                str(audio_path),
+            transcribe_kwargs = dict(
                 language=language,
                 beam_size=self.beam_size,
-                word_timestamps=True,
+                word_timestamps=self.word_timestamps,
                 vad_filter=self.vad_filter,
                 condition_on_previous_text=self.condition_on_previous_text,
                 hotwords=self.hotwords,
             )
+            # Faster Whisper returns a generator of segments with real-time
+            # progress; transcribe() returns (segments_generator, info).
+            if self._uses_batching():
+                from faster_whisper import BatchedInferencePipeline
+                pipeline = BatchedInferencePipeline(model=self._model)
+                segments_generator, info = pipeline.transcribe(
+                    str(audio_path),
+                    batch_size=self.batch_size,
+                    # Batched mode defaults to without_timestamps=True, which
+                    # collapses each VAD chunk into ONE giant segment (90s+) —
+                    # useless for the synced player. Keep timestamp tokens so
+                    # segments stay utterance-sized like sequential mode.
+                    without_timestamps=False,
+                    **transcribe_kwargs,
+                )
+            else:
+                segments_generator, info = self._model.transcribe(
+                    str(audio_path),
+                    **transcribe_kwargs,
+                )
 
             logger.info(
                 f"[FASTER-WHISPER] Audio duration: {info.duration:.1f}s, language: {info.language} "
                 f"(prob: {info.language_probability:.2f}) | model={self.model_name} "
                 f"beam={self.beam_size} vad={self.vad_filter} condition_prev={self.condition_on_previous_text} "
-                f"hotwords={'yes' if self.hotwords else 'no'}"
+                f"hotwords={'yes' if self.hotwords else 'no'} "
+                f"word_timestamps={self.word_timestamps} "
+                f"batched={self.batch_size if self._uses_batching() else 'no'}"
             )
 
             # Process segments as they arrive (this is where real-time callbacks happen)
             for segment in segments_generator:
                 segment_count += 1
-                segments.append({
+                seg_dict = {
                     "id": segment.id,
                     "start": segment.start,
                     "end": segment.end,
                     "text": segment.text
-                })
+                }
+                if self.word_timestamps and getattr(segment, "words", None):
+                    # Per-word timings, kept compact for segment meta storage.
+                    seg_dict["words"] = [
+                        {
+                            "w": str(w.word),
+                            "s": round(float(w.start), 3),
+                            "e": round(float(w.end), 3),
+                        }
+                        for w in segment.words
+                    ]
+                segments.append(seg_dict)
 
                 # Call progress callback if provided
                 if self.progress_callback and segment_count % 5 == 0:  # Report every 5 segments
@@ -314,6 +393,7 @@ class WhisperTranscriber:
         """
         segments = []
         for seg in whisper_output.get("segments", []):
+            words = seg.get("words")
             segments.append(
                 {
                     "segment_index": seg.get("id", 0),  # Whisper’s raw id (temporary)
@@ -321,7 +401,9 @@ class WhisperTranscriber:
                     "end_seconds": seg.get("end", 0.0),
                     "text": seg.get("text", "").strip(),
                     "confidence": None,
-                    "meta": None,
+                    # Word-level timings (when transcribed with word_timestamps)
+                    # ride along in meta so the player can use them later.
+                    "meta": {"words": words} if words else None,
                 }
             )
         # Step 1: dedupe hallucinated repeats

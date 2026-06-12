@@ -2523,6 +2523,17 @@
                                     </span>
                                 </div>
                                 <div class="pipeline-controls">
+                                    <label>
+                                        <input type="checkbox" v-model="whisperSettings.word_timestamps">
+                                        Word-level timestamps (tighter alignment)
+                                    </label>
+                                    <span class="pipeline-note">
+                                        Aligns every word individually: segment boundaries get refined to word edges (often
+                                        finer segmentation too) and per-word timings are stored with each segment — groundwork
+                                        for word-by-word player highlighting. Near-free on GPU; costs extra time on CPU.
+                                    </span>
+                                </div>
+                                <div class="pipeline-controls">
                                     <label>Preferred mix when both are available</label>
                                     <select v-model="whisperSettings.preferred_variant">
                                         <option value="sfx">SFX (full mix — voice + ambience)</option>
@@ -4301,7 +4312,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=163"></script>
+    <script src="/static/js/app.js?v=164"></script>
 </body>
 </html>
 

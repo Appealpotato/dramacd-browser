@@ -71,3 +71,22 @@ def build_clean_translation_source(segments: list[dict], drop_sfx: bool = True) 
         "line_count": len(cleaned_lines),
         "text": "\n".join(cleaned_lines),
     }
+
+
+CJK_CHAR_RE = re.compile(r"[぀-ヿ㐀-鿿ｦ-ﾟ]")
+
+
+def looks_translated_to_english(text: str) -> bool:
+    """True when `text` plausibly IS an English translation: non-empty and
+    not dominated by Japanese script. Models (especially local ones) sometimes
+    echo the Japanese input back as the 'translation' — treating that echo as
+    a finished translation poisons every later already-translated check.
+    Japanese proper nouns inside an English text are fine (low CJK ratio)."""
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return False
+    letters = [c for c in cleaned if not c.isspace()]
+    if not letters:
+        return False
+    cjk = sum(1 for c in letters if CJK_CHAR_RE.match(c))
+    return (cjk / len(letters)) < 0.5

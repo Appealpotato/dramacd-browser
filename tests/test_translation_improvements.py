@@ -34,6 +34,25 @@ class MergeGlossariesTests(unittest.TestCase):
     def test_all_empty(self):
         self.assertEqual(database.merge_glossaries(None, "", "   "), "")
 
+    def test_conflicting_term_mappings_first_wins(self):
+        # The feedback loop piled up three different spellings for one series
+        # name; rule lines must dedupe by TERM, not by whole line.
+        merged = database.merge_glossaries(
+            "濡恋鬼譚=Nurekoi Kitan",
+            "濡恋鬼譚=Nurengi Kitan\nミヤ=Miya",
+            "ミヤ=Miyu-kun",
+        )
+        self.assertEqual(merged.splitlines(), ["濡恋鬼譚=Nurekoi Kitan", "ミヤ=Miya"])
+
+    def test_non_rule_lines_still_dedupe_by_line(self):
+        # Character memory lines (no '=') keep whole-line semantics.
+        merged = database.merge_glossaries("Miya: teasing tone", "Miya: teasing tone\nListener: an OL")
+        self.assertEqual(merged.splitlines(), ["Miya: teasing tone", "Listener: an OL"])
+
+    def test_dangling_equals_treated_as_plain_line(self):
+        merged = database.merge_glossaries("=missing left", "trailing=", "=missing left")
+        self.assertEqual(merged.splitlines(), ["=missing left", "trailing="])
+
 
 class GlobalGlossarySettingTests(unittest.TestCase):
     @classmethod
@@ -405,6 +424,32 @@ class FeedbackGlossaryTests(unittest.TestCase):
 
         self.assertEqual(_coerce_feedback_glossary({"glossary": ["茶介=Chasuke"]}), "茶介=Chasuke")
         self.assertEqual(_coerce_feedback_glossary(None), "")
+
+
+class LooksTranslatedTests(unittest.TestCase):
+    """Echo detection: a 'translation' that is still mostly Japanese must not
+    count as translated — it used to poison the autopilot's skip check."""
+
+    def test_real_english_passes(self):
+        from text_cleaning import looks_translated_to_english
+
+        self.assertTrue(looks_translated_to_english("Wet Love Oni Tale (Nurekoi Kitan)"))
+        # JP proper nouns inside English text are fine.
+        self.assertTrue(looks_translated_to_english("The tale of the 鬼 and the office lady"))
+
+    def test_japanese_echo_fails(self):
+        from text_cleaning import looks_translated_to_english
+
+        self.assertFalse(looks_translated_to_english("【恐怖、高揚】濡恋鬼譚『骨の髄まで……』"))
+        self.assertFalse(looks_translated_to_english(""))
+        self.assertFalse(looks_translated_to_english("   "))
+
+    def test_autopilot_skip_check_uses_it(self):
+        import inspect
+        import pipeline.autopilot_job as ap
+
+        src = inspect.getsource(ap._execute_autopilot)
+        self.assertIn("looks_translated_to_english", src)
 
 
 class GlossaryFeedbackFlagTests(unittest.TestCase):

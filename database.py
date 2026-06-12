@@ -40,6 +40,7 @@ RUNTIME_WHISPER_MODEL_SETTING = "runtime_whisper_model"
 RUNTIME_WHISPER_VAD_FILTER_SETTING = "runtime_whisper_vad_filter"
 RUNTIME_WHISPER_BEAM_SIZE_SETTING = "runtime_whisper_beam_size"
 RUNTIME_WHISPER_CONDITION_ON_PREVIOUS_SETTING = "runtime_whisper_condition_on_previous"
+RUNTIME_WHISPER_WORD_TIMESTAMPS_SETTING = "runtime_whisper_word_timestamps"
 RUNTIME_WHISPER_PREFERRED_VARIANT_SETTING = "runtime_whisper_preferred_variant"
 
 SUPPORTED_WHISPER_MODELS = (
@@ -2010,15 +2011,29 @@ async def set_runtime_global_glossary(text: str) -> str:
 
 def merge_glossaries(*parts: str | None) -> str:
     """Combine glossary blocks (global + per-item/per-job) into one text,
-    dropping blank parts and duplicate lines while preserving order."""
+    dropping blank parts and duplicates while preserving order.
+
+    Lines shaped like '日本語=English' dedupe by their TERM (left side,
+    case-insensitive) — the first mapping for a term wins, so an earlier
+    source (global > item > job; user rules > generated rules) can't be
+    contradicted by a later one. The auto-feedback loop used to pile up
+    three different spellings for the same series name without this.
+    Lines without '=' (character memory etc.) dedupe by the whole line."""
     seen: set[str] = set()
     lines: list[str] = []
     for part in parts:
         for line in str(part or "").splitlines():
             stripped = line.strip()
-            if not stripped or stripped.lower() in seen:
+            if not stripped:
                 continue
-            seen.add(stripped.lower())
+            left, sep, right = stripped.partition("=")
+            if sep and left.strip() and right.strip():
+                key = "key:" + left.strip().lower()
+            else:
+                key = "line:" + stripped.lower()
+            if key in seen:
+                continue
+            seen.add(key)
             lines.append(stripped)
     return "\n".join(lines)
 
@@ -2083,6 +2098,20 @@ async def get_runtime_whisper_condition_on_previous() -> bool:
 
 async def set_runtime_whisper_condition_on_previous(enabled: bool) -> bool:
     await set_app_setting(RUNTIME_WHISPER_CONDITION_ON_PREVIOUS_SETTING, "1" if enabled else "0")
+    return bool(enabled)
+
+
+async def get_runtime_whisper_word_timestamps() -> bool:
+    """Word-level alignment: slower (+30-50% decode) but refines segment
+    boundaries and stores per-word timings in segment meta. Default off."""
+    value = await get_app_setting(RUNTIME_WHISPER_WORD_TIMESTAMPS_SETTING)
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def set_runtime_whisper_word_timestamps(enabled: bool) -> bool:
+    await set_app_setting(RUNTIME_WHISPER_WORD_TIMESTAMPS_SETTING, "1" if enabled else "0")
     return bool(enabled)
 
 

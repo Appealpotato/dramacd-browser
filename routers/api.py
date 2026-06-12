@@ -1503,6 +1503,7 @@ async def get_whisper_settings():
         "beam_size": await db.get_runtime_whisper_beam_size(),
         "condition_on_previous_text": await db.get_runtime_whisper_condition_on_previous(),
         "preferred_variant": await db.get_runtime_whisper_preferred_variant(),
+        "word_timestamps": await db.get_runtime_whisper_word_timestamps(),
         "supported_models": list(db.SUPPORTED_WHISPER_MODELS),
     }
 
@@ -1531,6 +1532,9 @@ async def update_whisper_settings(
     if request.condition_on_previous_text is not None:
         await db.set_runtime_whisper_condition_on_previous(bool(request.condition_on_previous_text))
         updated.append("condition_on_previous_text")
+    if request.word_timestamps is not None:
+        await db.set_runtime_whisper_word_timestamps(bool(request.word_timestamps))
+        updated.append("word_timestamps")
     if request.preferred_variant is not None:
         try:
             await db.set_runtime_whisper_preferred_variant(request.preferred_variant)
@@ -1547,6 +1551,7 @@ async def update_whisper_settings(
         "beam_size": await db.get_runtime_whisper_beam_size(),
         "condition_on_previous_text": await db.get_runtime_whisper_condition_on_previous(),
         "preferred_variant": await db.get_runtime_whisper_preferred_variant(),
+        "word_timestamps": await db.get_runtime_whisper_word_timestamps(),
     }
 
 
@@ -2262,6 +2267,19 @@ async def translate_item_metadata(item_id: int, _auth=Depends(require_api_key)):
         else:
             raise
     title_en, description_en, seiyuu_en, cultural_notes = _unpack_metadata_translation_result(result)
+    # Reject untranslated echoes: local models sometimes return the Japanese
+    # input verbatim as the "translation". Saving that poisons the _en columns
+    # and makes every later already-translated check skip the item forever.
+    from text_cleaning import looks_translated_to_english
+    if title_en and not looks_translated_to_english(title_en):
+        title_en = ""
+    if description_en and not looks_translated_to_english(description_en):
+        description_en = ""
+    if not title_en and not description_en:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Provider '{used_provider}' returned the Japanese text untranslated — nothing saved",
+        )
     description_en = _format_english_description(description_en)
     if cultural_notes and description_en:
         description_en = (

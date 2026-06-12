@@ -1096,6 +1096,7 @@ const app = createApp({
             beam_size: 5,
             condition_on_previous_text: true,
             preferred_variant: 'sfx',
+            word_timestamps: false,
         });
         const whisperSupportedModels = ref([
             'tiny', 'base', 'small', 'medium', 'large-v1', 'large-v2', 'large-v3'
@@ -6049,6 +6050,7 @@ const app = createApp({
                     beam_size: Number(data.beam_size) || 5,
                     condition_on_previous_text: !!data.condition_on_previous_text,
                     preferred_variant: data.preferred_variant === 'no-sfx' ? 'no-sfx' : 'sfx',
+                    word_timestamps: !!data.word_timestamps,
                 };
                 if (Array.isArray(data.supported_models) && data.supported_models.length > 0) {
                     whisperSupportedModels.value = data.supported_models;
@@ -6072,6 +6074,7 @@ const app = createApp({
                     beam_size: Number(whisperSettings.value.beam_size) || 5,
                     condition_on_previous_text: !!whisperSettings.value.condition_on_previous_text,
                     preferred_variant: whisperSettings.value.preferred_variant === 'no-sfx' ? 'no-sfx' : 'sfx',
+                    word_timestamps: !!whisperSettings.value.word_timestamps,
                 };
                 const resp = await fetch('/api/settings/whisper', {
                     method: 'PUT',
@@ -6089,6 +6092,7 @@ const app = createApp({
                     beam_size: Number(data.beam_size) || 5,
                     condition_on_previous_text: !!data.condition_on_previous_text,
                     preferred_variant: data.preferred_variant === 'no-sfx' ? 'no-sfx' : 'sfx',
+                    word_timestamps: !!data.word_timestamps,
                 };
                 whisperSettingsSuccess.value = `Saved (${(data.updated_fields || []).join(', ')}). Applies to next transcription job.`;
             } catch (err) {

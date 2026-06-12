@@ -66,6 +66,7 @@ async def run_transcription_job(job_id: int):
     vad_filter = await db.get_runtime_whisper_vad_filter()
     beam_size = await db.get_runtime_whisper_beam_size()
     condition_on_previous = await db.get_runtime_whisper_condition_on_previous()
+    word_timestamps = await db.get_runtime_whisper_word_timestamps()
     force = bool(metadata.get("force", False))
     track_ids_filter = metadata.get("track_ids")  # None means all tracks
 
@@ -140,6 +141,7 @@ async def run_transcription_job(job_id: int):
             beam_size=beam_size,
             condition_on_previous_text=condition_on_previous,
             hotwords=hotwords,
+            word_timestamps=word_timestamps,
         )
         device = transcriber.get_device()
         await db.append_job_event(
@@ -153,6 +155,8 @@ async def run_transcription_job(job_id: int):
                 "beam_size": beam_size,
                 "condition_on_previous_text": condition_on_previous,
                 "hotwords": hotwords or None,
+                "word_timestamps": word_timestamps,
+                "batch_size": transcriber.batch_size if transcriber._uses_batching() else 0,
             },
         )
     except Exception as e:
