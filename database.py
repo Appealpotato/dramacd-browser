@@ -4364,41 +4364,49 @@ async def get_pipeline_track_groups(item_id: int, preferred_variant: str = "sfx"
         by_root.setdefault(_find(i), []).append(tracks[i])
     sub_clusters: list[list[dict]] = list(by_root.values())
 
+    # --- Step 2a: classify variants up front ---
+    # The duration gate below is variant-aware, so every track needs its
+    # SFX/no-SFX label before bucketing (step 3 reuses these).
+    for t in tracks:
+        _, _variant_label = _classify_variant(t)
+        t["_variant"] = _variant_label
+
     # --- Step 2b: split each stem-cluster into duration buckets ---
-    # Some circles trim silent/SFX-only segments out of the no-SFX mix, so
-    # the no-SFX file ends up 5-15s shorter than its SFX sibling. Their
-    # segment timings won't line up — applying a transcript from one onto
-    # the other produces drifted subtitles. So within a stem cluster, tracks
-    # whose durations differ by more than 2s are treated as independent
-    # recordings (separate groups). FLAC/MP3 of the same source still cluster
-    # together (codec padding is sub-50ms).
+    # Within a stem cluster, SAME-variant tracks more than 2s apart are
+    # independent recordings (main track + freetalk + bonus all named
+    # "RJ12345*") and split into separate groups. A DIFFERENT-variant track
+    # may join a bucket within a looser 30s: circles trim silent/SFX-only
+    # segments out of the no-SFX mix, so it commonly runs 2-15s shorter than
+    # its SFX sibling — splitting those was the bug, not the feature (the
+    # whole point of variants is that they're one group). FLAC/MP3 of the
+    # same source still cluster tightly (codec padding is sub-50ms).
     _DURATION_TOLERANCE = 2.0
+    _VARIANT_DURATION_TOLERANCE = 30.0
     bucketed_clusters: list[list[dict]] = []
     for sub in sub_clusters:
-        buckets: list[tuple[float | None, list[dict]]] = []
+        buckets: list[tuple[float | None, str, list[dict]]] = []
         for t in sub:
             d = t.get("duration_seconds")
+            v = t.get("_variant") or "sfx"
             placed = False
             if isinstance(d, (int, float)):
                 for b in buckets:
-                    if isinstance(b[0], (int, float)) and abs(b[0] - d) <= _DURATION_TOLERANCE:
-                        b[1].append(t)
+                    if not isinstance(b[0], (int, float)):
+                        continue
+                    tol = _DURATION_TOLERANCE if v == b[1] else _VARIANT_DURATION_TOLERANCE
+                    if abs(b[0] - d) <= tol:
+                        b[2].append(t)
                         placed = True
                         break
             if not placed:
-                buckets.append((d, [t]))
-        bucketed_clusters.extend(b[1] for b in buckets)
+                buckets.append((d, v, [t]))
+        bucketed_clusters.extend(b[2] for b in buckets)
     sub_clusters = bucketed_clusters
 
-    # --- Step 3: label variants per sub-cluster + emit groups ---
-    # Variant LABELING is still regex-based (Latin + JP), but it's now purely
-    # cosmetic — it decides what pill text to show, not whether tracks group.
+    # --- Step 3: emit groups (variants already labeled in step 2a) ---
     groups: list[dict] = []
     for sub in sub_clusters:
         stems = [_track_filename_stem(t) for t in sub]
-        for t in sub:
-            _, variant = _classify_variant(t)
-            t["_variant"] = variant
 
         canonical_stem = min(stems, key=len)
         for t in sub:

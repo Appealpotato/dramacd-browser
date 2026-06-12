@@ -1326,6 +1326,7 @@ const app = createApp({
         const VARIANT_RANK_SFX_FIRST = { 'sfx': 0, 'no-sfx': 1 };
         const VARIANT_RANK_NOSFX_FIRST = { 'no-sfx': 0, 'sfx': 1 };
         const DURATION_TOL = 2.0; // Allows MP3 encoder padding / silent-frame skew
+        const VARIANT_DURATION_TOL = 30.0; // Cross-variant: no-SFX mixes run shorter
         // Alt-mix variant tokens — matched both at the end of a filename stem
         // and as standalone components in any ancestor folder name.
         const VARIANT_TOKEN = String.raw`no[\s_\-]?se|no[\s_\-]?sfx|no[\s_\-]?effects?|se[\s_\-]?less|se[\s_\-]?off|voice[\s_\-]?only|no[\s_\-]?vocal|no[\s_\-]?bgm|bgm[\s_\-]?less`;
@@ -1413,46 +1414,52 @@ const app = createApp({
             }
             let subClusters = Array.from(byRoot.values());
 
+            // Step 2a: classify variants up front (mirrors backend) — the
+            // duration gate below is variant-aware. No-SFX if any signal hits:
+            // Latin suffix, JP token in stem, or Latin/JP token in any
+            // ancestor folder.
+            for (const t of tracks) {
+                const stem = _filenameStem(t);
+                const folders = _ancestorFolders(t);
+                const stemMatch = VARIANT_SUFFIX_RE.test(stem) || VARIANT_FOLDER_JP_RE.test(stem);
+                const folderMatch = folders.some(f => VARIANT_FOLDER_RE.test(f) || VARIANT_FOLDER_JP_RE.test(f));
+                t._variant = (stemMatch || folderMatch) ? 'no-sfx' : 'sfx';
+            }
+
             // Step 2b: split each stem-cluster into duration buckets (mirrors
-            // backend). Without this, tracks that share a stem prefix but are
-            // wildly different recordings (e.g. main track + freetalk + bonus
-            // all named "RJ12345*") collapse into a single group and only the
-            // preferred one ever appears in the transcription list.
+            // backend). SAME-variant tracks more than 2s apart are independent
+            // recordings (main track + freetalk + bonus all named "RJ12345*")
+            // and split into separate groups. A DIFFERENT-variant track may
+            // join within a looser 30s: no-SFX mixes drop SFX-only segments
+            // and commonly run 2-15s shorter than their SFX sibling.
             const bucketed = [];
             for (const sub of subClusters) {
-                const buckets = []; // [{ d: number|null, items: track[] }]
+                const buckets = []; // [{ d: number|null, v: string, items: track[] }]
                 for (const t of sub) {
                     const d = t.duration_seconds;
+                    const v = t._variant || 'sfx';
                     let placed = false;
                     if (typeof d === 'number') {
                         for (const b of buckets) {
-                            if (typeof b.d === 'number' && Math.abs(b.d - d) <= DURATION_TOL) {
+                            if (typeof b.d !== 'number') continue;
+                            const tol = v === b.v ? DURATION_TOL : VARIANT_DURATION_TOL;
+                            if (Math.abs(b.d - d) <= tol) {
                                 b.items.push(t);
                                 placed = true;
                                 break;
                             }
                         }
                     }
-                    if (!placed) buckets.push({ d, items: [t] });
+                    if (!placed) buckets.push({ d, v, items: [t] });
                 }
                 for (const b of buckets) bucketed.push(b.items);
             }
             subClusters = bucketed;
 
-            // Step 3: label variants per sub-cluster (regex is now COSMETIC —
-            // it decides pill text, not grouping).
+            // Step 3: emit groups (variants already labeled in step 2a).
             const groups = [];
             for (const sub of subClusters) {
                 const stems = sub.map(t => _filenameStem(t));
-                for (const t of sub) {
-                    const stem = _filenameStem(t);
-                    const folders = _ancestorFolders(t);
-                    // No-SFX if any signal hits: Latin suffix, JP token in stem,
-                    // or Latin/JP token in any ancestor folder.
-                    const stemMatch = VARIANT_SUFFIX_RE.test(stem) || VARIANT_FOLDER_JP_RE.test(stem);
-                    const folderMatch = folders.some(f => VARIANT_FOLDER_RE.test(f) || VARIANT_FOLDER_JP_RE.test(f));
-                    t._variant = (stemMatch || folderMatch) ? 'no-sfx' : 'sfx';
-                }
                 const canonical = stems.reduce((a, b) => a.length <= b.length ? a : b);
                 for (const t of sub) t._canonical_stem = canonical;
 
