@@ -48,6 +48,19 @@ def _supports_temperature(model: str) -> bool:
     return True
 
 
+def anthropic_headers(api_key: str | None) -> dict:
+    """Request headers for an Anthropic-format endpoint. Keyless local shims
+    are valid — the x-api-key header is only sent when a key is configured
+    (httpx rejects None header values outright)."""
+    headers = {
+        "Content-Type": "application/json",
+        "anthropic-version": ANTHROPIC_VERSION,
+    }
+    if api_key:
+        headers["x-api-key"] = str(api_key)
+    return headers
+
+
 def _normalize_messages_url(base_url: str) -> str:
     """Resolve the user's base URL to ``{base}/messages``.
 
@@ -152,11 +165,7 @@ class AnthropicCompatTrackTranslator(OpenRouterTrackTranslator):
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 self.endpoint,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": self.api_key,
-                    "anthropic-version": ANTHROPIC_VERSION,
-                },
+                headers=anthropic_headers(self.api_key),
                 json=request_json,
             )
 

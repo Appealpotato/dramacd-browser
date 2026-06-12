@@ -810,9 +810,9 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
     model = await db.get_runtime_openai_compat_model()
     base_url = await db.get_runtime_openai_compat_base_url()
     request_format = await db.get_runtime_openai_compat_request_format()
-    # A local Ollama server is unauthenticated — no key needed in that mode.
-    if not api_key and request_format != "ollama":
-        raise HTTPException(status_code=400, detail="Missing OpenAI-compatible API key")
+    # Local OpenAI-compatible servers (LM Studio, llama.cpp, vLLM, Ollama) are
+    # typically unauthenticated — the key is optional for this provider. If
+    # the endpoint actually requires auth, its own 401 is the clearer error.
     if not base_url:
         raise HTTPException(status_code=400, detail="Missing OpenAI-compatible base URL")
     if not model:
@@ -857,14 +857,11 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             # temperature on models that still accept it.
             if _supports_temperature(model):
                 request_json["temperature"] = 0.2
+            from pipeline.anthropic_compat_translator import anthropic_headers
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     endpoint,
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": api_key,
-                        "anthropic-version": ANTHROPIC_VERSION,
-                    },
+                    headers=anthropic_headers(api_key),
                     json=request_json,
                 )
             if resp.status_code >= 400:
@@ -910,13 +907,13 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             }
             if use_response_format:
                 request_json["response_format"] = {"type": "json_object"}
+            _headers = {"Content-Type": "application/json"}
+            if api_key:
+                _headers["Authorization"] = f"Bearer {api_key}"
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     endpoint,
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=_headers,
                     json=request_json,
                 )
             if resp.status_code >= 400:
@@ -1028,14 +1025,11 @@ async def _provider_has_key(provider: str) -> bool:
     if chosen == "chutes":
         return bool(await db.get_runtime_chutes_api_key())
     if chosen == "openai_compat":
-        has_key = bool(await db.get_runtime_openai_compat_api_key())
-        if not has_key:
-            # Local Ollama servers are unauthenticated — base URL + model is
-            # a complete configuration in that mode.
-            has_key = await db.get_runtime_openai_compat_request_format() == "ollama"
+        # Local OpenAI-compatible servers (LM Studio, llama.cpp, vLLM, Ollama)
+        # are typically unauthenticated — base URL + model is a complete
+        # configuration; the key is optional for every request format.
         return bool(
-            has_key
-            and await db.get_runtime_openai_compat_base_url()
+            await db.get_runtime_openai_compat_base_url()
             and await db.get_runtime_openai_compat_model()
         )
     return bool(await db.get_runtime_gemini_api_key())
@@ -1076,7 +1070,7 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
         model = await db.get_runtime_openai_compat_model()
         base_url = await db.get_runtime_openai_compat_base_url()
         request_format = await db.get_runtime_openai_compat_request_format()
-        if not (base_url and model) or (not api_key and request_format != "ollama"):
+        if not (base_url and model):
             raise HTTPException(status_code=400, detail="OpenAI-compatible provider not fully configured")
 
         if request_format == "ollama":
@@ -1108,14 +1102,11 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
             # send temperature on models that still accept it.
             if _supports_temperature(model):
                 anthropic_body["temperature"] = 0.2
+            from pipeline.anthropic_compat_translator import anthropic_headers
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     endpoint,
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": api_key,
-                        "anthropic-version": ANTHROPIC_VERSION,
-                    },
+                    headers=anthropic_headers(api_key),
                     json=anthropic_body,
                 )
             if resp.status_code >= 400:
@@ -1167,10 +1158,13 @@ async def _openai_chat_call(endpoint: str, api_key: str, model: str, prompt: str
         }
         if use_response_format:
             body["response_format"] = {"type": "json_object"}
+        _headers = {"Content-Type": "application/json"}
+        if api_key:
+            _headers["Authorization"] = f"Bearer {api_key}"
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 endpoint,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=_headers,
                 json=body,
             )
         if resp.status_code >= 400:
@@ -1244,48 +1238,91 @@ async def get_ai_settings():
     }
 
 
-@router.get("/settings/ai/openai-compat-models")
-async def list_openai_compat_models():
-    """Probe the configured base URL's /models endpoint and return model ids."""
-    api_key = await db.get_runtime_openai_compat_api_key()
-    base_url = await db.get_runtime_openai_compat_base_url()
-    if not api_key:
-        raise HTTPException(status_code=400, detail="Missing OpenAI-compatible API key")
-    if not base_url:
-        raise HTTPException(status_code=400, detail="Missing OpenAI-compatible base URL")
-    url = base_url.rstrip("/")
+def _openai_compat_models_url(base_url: str, request_format: str) -> str:
+    """Resolve the configured base URL to the right model-listing endpoint
+    for its request format. The base URL may have been pasted with any of
+    the path shapes users copy from their server's docs."""
+    url = str(base_url or "").strip().rstrip("/")
     if url.endswith("/chat/completions"):
         url = url[: -len("/chat/completions")]
-    models_url = f"{url}/models"
-    async with httpx.AsyncClient(timeout=20.0) as client:
-        resp = await client.get(
-            models_url,
-            headers={"Authorization": f"Bearer {api_key}"},
-        )
-    if resp.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Models endpoint error ({resp.status_code}): {resp.text[:300]}",
-        )
-    try:
-        payload = resp.json()
-    except Exception:
-        raise HTTPException(status_code=502, detail="Models endpoint returned invalid JSON")
-    rows = payload.get("data") if isinstance(payload, dict) else None
+    if url.endswith("/messages"):
+        url = url[: -len("/messages")]
+    if request_format == "ollama":
+        # Native Ollama listing. Strip OpenAI/api path suffixes back to the
+        # server root first — the base URL for ollama format is usually bare
+        # (http://host:11434) but tolerate /v1 or /api copied from elsewhere.
+        for suffix in ("/api/chat", "/api", "/v1"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)]
+                break
+        return f"{url}/api/tags"
+    return f"{url}/models"
+
+
+def _parse_models_payload(payload, request_format: str) -> list[str]:
+    """Extract model ids from any of the shapes the three formats return:
+    OpenAI/Anthropic {"data": [{"id": ...}]}, Ollama {"models": [{"name": ...}]},
+    or a bare list."""
+    rows = None
+    if isinstance(payload, dict):
+        rows = payload.get("models") if request_format == "ollama" else payload.get("data")
+        if not isinstance(rows, list):
+            rows = payload.get("data") or payload.get("models")
     if not isinstance(rows, list):
         rows = payload if isinstance(payload, list) else []
     ids: list[str] = []
     for row in rows:
         if isinstance(row, dict):
-            mid = str(row.get("id") or row.get("name") or "").strip()
+            mid = str(row.get("id") or row.get("name") or row.get("model") or "").strip()
             if mid:
                 ids.append(mid)
         elif isinstance(row, str):
             mid = row.strip()
             if mid:
                 ids.append(mid)
-    ids.sort()
-    return {"models": ids, "count": len(ids), "url": models_url}
+    return sorted(set(ids))
+
+
+@router.get("/settings/ai/openai-compat-models")
+async def list_openai_compat_models():
+    """Probe the configured endpoint's model listing and return model ids.
+    Format-aware: OpenAI/Anthropic formats hit {base}/models, ollama format
+    hits the native {root}/api/tags. The API key is optional — local servers
+    (LM Studio, Ollama, llama.cpp) are unauthenticated."""
+    api_key = await db.get_runtime_openai_compat_api_key()
+    base_url = await db.get_runtime_openai_compat_base_url()
+    request_format = await db.get_runtime_openai_compat_request_format()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="Missing OpenAI-compatible base URL")
+    models_url = _openai_compat_models_url(base_url, request_format)
+    headers = {}
+    if api_key:
+        if request_format == "anthropic":
+            from pipeline.anthropic_compat_translator import ANTHROPIC_VERSION
+            headers = {"x-api-key": api_key, "anthropic-version": ANTHROPIC_VERSION}
+        else:
+            headers = {"Authorization": f"Bearer {api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(models_url, headers=headers)
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"Models endpoint timed out: {models_url}")
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Models endpoint unreachable ({type(exc).__name__}): {models_url}",
+        )
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Models endpoint error ({resp.status_code}) at {models_url}: {resp.text[:300]}",
+        )
+    try:
+        payload = resp.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Models endpoint returned invalid JSON")
+    ids = _parse_models_payload(payload, request_format)
+    return {"models": ids, "count": len(ids), "url": models_url, "request_format": request_format}
 
 
 @router.post("/settings/ai/test")

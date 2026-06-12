@@ -5960,18 +5960,27 @@ const app = createApp({
             apiOpenAiCompatModelsBusy.value = true;
             apiOpenAiCompatModelsError.value = '';
             try {
-                // Persist the URL/key first so the server-side fetch sees them.
+                // Persist the URL/key/format first so the server-side fetch sees them.
                 const baseUrl = String(apiOpenAiCompatBaseUrl.value || '').trim();
                 const key = String(apiOpenAiCompatKeyInput.value || '').trim();
-                if (baseUrl || key) {
+                const fmt = String(apiOpenAiCompatRequestFormat.value || '').trim().toLowerCase();
+                if (baseUrl || key || fmt) {
                     const persistPayload = { translation_provider: apiTranslationProvider.value };
                     if (baseUrl) persistPayload.openai_compat_base_url = baseUrl;
                     if (key) persistPayload.openai_compat_api_key = key;
-                    await fetch('/api/settings/ai', {
+                    if (fmt) persistPayload.openai_compat_request_format = fmt;
+                    const saveResp = await fetch('/api/settings/ai', {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(persistPayload),
                     });
+                    if (!saveResp.ok) {
+                        // Surface validation errors (e.g. base URL missing http://)
+                        // instead of letting the fetch below fail confusingly.
+                        const saveData = await saveResp.json().catch(() => ({}));
+                        apiOpenAiCompatModelsError.value = saveData.detail || `Settings save failed (${saveResp.status})`;
+                        return;
+                    }
                     if (key) apiOpenAiCompatKeyInput.value = '';
                 }
                 const resp = await fetch('/api/settings/ai/openai-compat-models');

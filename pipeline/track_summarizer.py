@@ -256,14 +256,11 @@ class TrackSummarizer:
             # send temperature on models that still accept it.
             if _supports_temperature(self.model):
                 anthropic_body["temperature"] = 0.3
+            from pipeline.anthropic_compat_translator import anthropic_headers
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     endpoint,
-                    headers={
-                        "Content-Type": "application/json",
-                        "x-api-key": self.api_key,
-                        "anthropic-version": ANTHROPIC_VERSION,
-                    },
+                    headers=anthropic_headers(self.api_key),
                     json=anthropic_body,
                 )
             if resp.status_code >= 400:
@@ -292,13 +289,13 @@ class TrackSummarizer:
             }
             if use_response_format:
                 body["response_format"] = {"type": "json_object"}
+            _headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                _headers["Authorization"] = f"Bearer {self.api_key}"
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     endpoint,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=_headers,
                     json=body,
                 )
             if resp.status_code >= 400:

@@ -415,8 +415,11 @@ async def _run_translation_job_inner(job_id: int):
     if provider not in db.SUPPORTED_TRANSLATION_PROVIDERS:
         await db.update_job(job_id, status="failed", error=f"Unsupported provider: {provider}")
         return
-    # Ollama-format endpoints are local and unauthenticated — no key needed.
-    _key_optional = provider == "openai_compat" and runtime_request_format == "ollama"
+    # OpenAI-compatible endpoints are typically local and unauthenticated
+    # (LM Studio, llama.cpp, vLLM, Ollama) — the key is optional regardless
+    # of request format; an endpoint that needs auth will 401 with a clearer
+    # message than a preemptive block here.
+    _key_optional = provider == "openai_compat"
     if not runtime_api_key and not _key_optional:
         missing_key_name = "DRAMACD_GEMINI_API_KEY"
         if provider == "openrouter":

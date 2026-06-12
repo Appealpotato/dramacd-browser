@@ -111,13 +111,13 @@ class OpenRouterTrackTranslator:
                 self.model,
                 use_response_format,
             )
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
             async with httpx.AsyncClient(timeout=120) as client:
                 resp = await client.post(
                     self.endpoint,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json=request_json,
                 )
 

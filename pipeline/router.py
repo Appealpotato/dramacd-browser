@@ -359,7 +359,9 @@ async def backfill_track_summaries(item_id: int, force: bool = False, _auth=Depe
         api_key = await db.get_runtime_gemini_api_key()
         model = await db.get_runtime_gemini_model()
         provider = "gemini"
-    if not api_key:
+    # openai_compat servers are typically local/keyless (LM Studio, Ollama…);
+    # base URL + model is a complete configuration for them.
+    if not api_key and provider != "openai_compat":
         raise HTTPException(status_code=400, detail=f"Active provider '{provider}' has no API key")
 
     drama_description = str(item.get("description_en") or item.get("description") or "").strip()
