@@ -9475,14 +9475,20 @@ const app = createApp({
         }
 
         function togglePlayPause() {
-            if (!playerAudioElement.value) return;
-
-            if (playerIsPlaying.value) {
-                playerAudioElement.value.pause();
-            } else {
-                playerAudioElement.value.play().catch(err => {
+            const el = playerAudioElement.value;
+            if (!el) return;
+            // Decide off the ELEMENT's own state, not the playerIsPlaying
+            // mirror ref: if the ref ever desyncs (missed pause event, state
+            // wedge), trusting it makes the button call pause() on an
+            // already-paused player forever — "stuck until refresh".
+            if (el.paused) {
+                el.play().catch(err => {
                     console.error('Playback failed:', err);
                 });
+                playerIsPlaying.value = true;
+            } else {
+                el.pause();
+                playerIsPlaying.value = false;
             }
         }
 
