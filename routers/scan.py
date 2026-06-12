@@ -70,7 +70,18 @@ async def _auto_index_loose_item(item_id: int, files: list) -> int:
             )
         from pipeline.extractor import _index_loose_tracks
         tracks = _index_loose_tracks(item_id, audio_paths)
-        return await db.replace_pipeline_tracks_for_item(item_id, tracks)
+        count = await db.replace_pipeline_tracks_for_item(item_id, tracks)
+        # Import any .srt/.vtt shipped next to the loose audio as a transcript
+        # run — the archive extraction path already does this, so a pre-extracted
+        # folder that ships subtitles shouldn't need a manual extract to get them.
+        # Idempotent: only fills tracks that have no transcript yet.
+        if count:
+            try:
+                from pipeline.subtitle_import import import_bundled_subtitles
+                await import_bundled_subtitles(item_id)
+            except Exception as sub_exc:
+                logger.warning(f"Bundled-subtitle import for loose item {item_id} failed: {sub_exc}")
+        return count
     except Exception as exc:  # never break ingestion over an optional convenience
         logger.warning(f"Auto-index of loose item {item_id} failed: {exc}")
         return 0
