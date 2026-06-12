@@ -31,6 +31,23 @@ DEFAULT_MAX_TOKENS = 4096
 MAX_CACHE_BREAKPOINTS = 4
 
 
+def _supports_temperature(model: str) -> bool:
+    """Newer Claude models (Fable 5, Opus 4.8 / 4.7) removed the sampling
+    parameters — sending ``temperature`` returns a 400 ("temperature is
+    deprecated for this model"). Detect those and omit it for them.
+
+    Errs on the side of still sending temperature for anything we don't
+    recognise, so non-Claude / proxied endpoints keep their existing behaviour."""
+    m = (model or "").lower()
+    if "fable" in m:
+        return False
+    # claude-opus-4-7 / 4-8 (and any later 4-9, 5-x) dropped sampling params too.
+    for major, minor in (("4", 7), ("4", 8), ("4", 9)):
+        if f"opus-{major}-{minor}" in m or f"opus{major}.{minor}" in m:
+            return False
+    return True
+
+
 def _normalize_messages_url(base_url: str) -> str:
     """Resolve the user's base URL to ``{base}/messages``.
 
@@ -120,8 +137,11 @@ class AnthropicCompatTrackTranslator(OpenRouterTrackTranslator):
             "model": self.model,
             "messages": messages,
             "max_tokens": self.max_tokens,
-            "temperature": 0.2,
         }
+        # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only send
+        # temperature on models that still accept it.
+        if _supports_temperature(self.model):
+            request_json["temperature"] = 0.2
         logger.info(
             "[%s] POST %s model=%s cache_breakpoints=%d",
             self.provider_label,

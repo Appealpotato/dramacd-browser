@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 import os
@@ -1279,12 +1280,21 @@ def _ensure_aac_cache(src: Path, track_id: int) -> Path:
         )
 
     import subprocess
-    tmp_file = cache_file.with_suffix(".m4a.tmp")
+    import uuid
+    # Unique temp name so two concurrent cold transcodes of the same track
+    # (e.g. two devices, or a prewarm racing a real request) can't clobber a
+    # shared tmp file. Both produce a complete file; the last replace() wins.
+    tmp_file = cache_file.with_suffix(f".{uuid.uuid4().hex}.tmp.m4a")
+    # 128k AAC: transparent for speech (drama CDs are voice), and noticeably
+    # faster to encode + smaller to download than 192k. `-threads 0` lets
+    # ffmpeg use all cores. `+faststart` is load-bearing for mobile sync —
+    # it puts the moov atom (with real duration) up front; do NOT remove it.
     cmd = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+        "-threads", "0",
         "-i", str(src),
         "-vn",
-        "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+        "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
         "-movflags", "+faststart",
         "-f", "ipod",
         str(tmp_file),
@@ -1326,7 +1336,10 @@ async def serve_track_audio(track_id: int, format: str | None = Query(None)):
         raise HTTPException(status_code=404, detail="Audio file not found on disk")
 
     if format == "aac":
-        cached = _ensure_aac_cache(audio_file, track_id)
+        # Run the (potentially multi-second) transcode off the event loop so a
+        # cold FLAC load doesn't freeze every other request — including the
+        # player's own subtitle-sync polling.
+        cached = await asyncio.to_thread(_ensure_aac_cache, audio_file, track_id)
         return FileResponse(
             path=str(cached),
             media_type="audio/mp4",
@@ -1356,6 +1369,31 @@ async def serve_track_audio(track_id: int, format: str | None = Query(None)):
         media_type=media_type,
         filename=audio_file.name
     )
+
+
+@router.get("/player/audio/{track_id}/prewarm")
+async def prewarm_track_audio(track_id: int):
+    """Build the AAC cache for a track ahead of playback without streaming it.
+    The player calls this fire-and-forget when a FLAC track (with no lossy
+    sibling) is selected on mobile, so the transcode is already done by the
+    time the user presses play and the real `?format=aac` request lands on a
+    warm cache. Returns immediately with the cache state."""
+    track = await db.get_pipeline_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    track_path = track.get("track_path")
+    if not track_path:
+        raise HTTPException(status_code=404, detail="Track path not available")
+    audio_file = Path(track_path)
+    if not audio_file.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found on disk")
+    try:
+        cached = await asyncio.to_thread(_ensure_aac_cache, audio_file, track_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # transcode is best-effort; don't 500 the UI
+        return JSONResponse({"ok": False, "error": str(exc)[:200]}, status_code=200)
+    return {"ok": True, "cached": cached.exists()}
 
 
 _EXPORT_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]+")

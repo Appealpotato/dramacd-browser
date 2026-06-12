@@ -2383,11 +2383,16 @@ async def update_item_user_data(item_id: int, data: dict):
         indexed_overrides: dict[str, list] = {}
 
         # Virtual field: `archive_path` — an absolute path on disk for a
-        # manual item. We translate it into items.files=[abs_path] plus
-        # derived total_size / file_count / file_format columns. Manual items
-        # use this to point at a .7z/.zip/.rar/.tar the scanner wouldn't have
-        # picked up. The extractor's archive resolver treats absolute-path
-        # entries in items.files as direct hits.
+        # manual item. We translate it into items.files plus derived
+        # total_size / file_count / file_format columns. Manual items use this
+        # to point at either:
+        #   - a .7z/.zip/.rar/.tar archive the scanner wouldn't have picked up
+        #     (stored as a single-element files=[abs_path]), or
+        #   - a FOLDER of already-extracted loose audio (every audio file
+        #     inside is stored as an absolute-path entry, so the extractor
+        #     indexes them in place without copying).
+        # The extractor's archive resolver treats absolute-path entries in
+        # items.files as direct hits.
         if "archive_path" in data and data["archive_path"] is not None:
             raw = str(data["archive_path"]).strip()
             if raw:
@@ -2395,9 +2400,23 @@ async def update_item_user_data(item_id: int, data: dict):
                 p = _Path(raw)
                 files_value = [raw]
                 total_size = 0
+                file_count = 1
                 file_format: list[str] = []
                 try:
-                    if p.exists() and p.is_file():
+                    if p.is_dir():
+                        from config import AUDIO_EXTENSIONS as _AUDIO_EXTS
+                        audio = sorted(
+                            fp for fp in p.rglob("*")
+                            if fp.is_file() and fp.suffix.lower() in _AUDIO_EXTS
+                        )
+                        if audio:
+                            files_value = [str(fp) for fp in audio]
+                            file_count = len(audio)
+                            total_size = sum((fp.stat().st_size for fp in audio), 0)
+                            file_format = sorted({
+                                fp.suffix.lower().lstrip(".") for fp in audio if fp.suffix
+                            })
+                    elif p.is_file():
                         total_size = p.stat().st_size
                         suf = p.suffix.lower().lstrip(".")
                         if suf:
@@ -2407,7 +2426,7 @@ async def update_item_user_data(item_id: int, data: dict):
                 fields.append("files = ?")
                 values.append(json.dumps(files_value, ensure_ascii=False))
                 fields.append("file_count = ?")
-                values.append(1)
+                values.append(file_count)
                 fields.append("total_size = ?")
                 values.append(total_size)
                 if file_format:

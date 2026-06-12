@@ -2078,16 +2078,50 @@ const app = createApp({
                 return [];
             }
         }
-        // Filename → readable default title. Pulls the basename, strips
-        // archive extensions (including multi-volume `.part1.rar`).
+        // Pick ONE parent folder, then ask the server to enumerate every
+        // addable unit inside it — archives AND already-extracted subfolders,
+        // mixed — and return their paths. [] on cancel / empty / failure.
+        async function _pickFolderChildrenForBulk(title) {
+            try {
+                const fr = await fetch('/api/system/pick-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title }),
+                });
+                if (!fr.ok) throw new Error('HTTP ' + fr.status);
+                const fd = await fr.json();
+                if (fd.cancelled || !fd.path) return [];
+                const lr = await fetch('/api/system/list-addable-children', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder: fd.path }),
+                });
+                if (!lr.ok) {
+                    const d = await lr.json().catch(() => ({}));
+                    throw new Error(d.detail || ('HTTP ' + lr.status));
+                }
+                const ld = await lr.json();
+                const entries = Array.isArray(ld.entries) ? ld.entries : [];
+                if (!entries.length) {
+                    pushToast({ kind: 'warning', title: 'Bulk add', body: 'No archives or audio folders found in there.', ttl: 5000 });
+                }
+                return entries.map(e => e.path);
+            } catch (err) {
+                pushToast({ kind: 'failure', title: 'Bulk add', body: 'Picker failed: ' + (err.message || err), ttl: 5000 });
+                return [];
+            }
+        }
+        // Filename/folder name → readable default title. Pulls the basename,
+        // strips archive extensions (including multi-volume `.part1.rar`); for
+        // a folder there's no extension so the folder name passes through.
         function _titleFromArchivePath(p) {
-            const base = String(p || '').split(/[\\/]/).pop() || '';
+            const base = String(p || '').split(/[\\/]/).filter(Boolean).pop() || '';
             return _stripArchiveExtension(base) || base || '';
         }
-        async function bulkCreateDramaCds() {
+        async function bulkCreateDramaCds(paths = null) {
             if (tokutenCreateBusy.value) return;
-            const paths = await _pickArchivesForBulk('Pick drama CD archives');
-            if (paths.length === 0) return;
+            if (paths == null) paths = await _pickArchivesForBulk('Pick drama CD archives');
+            if (!paths || paths.length === 0) return;
             tokutenCreateBusy.value = true;
             let ok = 0, fail = 0;
             try {
@@ -2126,10 +2160,10 @@ const app = createApp({
                 tokutenCreateBusy.value = false;
             }
         }
-        async function bulkCreateGames() {
+        async function bulkCreateGames(paths = null) {
             if (tokutenCreateBusy.value) return;
-            const paths = await _pickArchivesForBulk('Pick game files / archives');
-            if (paths.length === 0) return;
+            if (paths == null) paths = await _pickArchivesForBulk('Pick game files / archives');
+            if (!paths || paths.length === 0) return;
             tokutenCreateBusy.value = true;
             let ok = 0, fail = 0;
             try {
@@ -2164,10 +2198,10 @@ const app = createApp({
                 tokutenCreateBusy.value = false;
             }
         }
-        async function bulkCreateTokutens() {
+        async function bulkCreateTokutens(paths = null) {
             if (tokutenCreateBusy.value) return;
-            const paths = await _pickArchivesForBulk('Pick tokuten archives');
-            if (paths.length === 0) return;
+            if (paths == null) paths = await _pickArchivesForBulk('Pick tokuten archives');
+            if (!paths || paths.length === 0) return;
             tokutenCreateBusy.value = true;
             let ok = 0, fail = 0;
             try {
@@ -2207,6 +2241,25 @@ const app = createApp({
             } finally {
                 tokutenCreateBusy.value = false;
             }
+        }
+
+        // "Bulk add from a folder" variants: pick one parent folder, let the
+        // server enumerate every archive + extracted subfolder inside, then run
+        // the same create loop. Reuses the path-array entry points above.
+        async function bulkCreateDramaCdsFromFolder() {
+            if (tokutenCreateBusy.value) return;
+            const paths = await _pickFolderChildrenForBulk('Pick a folder of drama CDs (archives or extracted)');
+            if (paths.length) await bulkCreateDramaCds(paths);
+        }
+        async function bulkCreateGamesFromFolder() {
+            if (tokutenCreateBusy.value) return;
+            const paths = await _pickFolderChildrenForBulk('Pick a folder of games (archives or extracted)');
+            if (paths.length) await bulkCreateGames(paths);
+        }
+        async function bulkCreateTokutensFromFolder() {
+            if (tokutenCreateBusy.value) return;
+            const paths = await _pickFolderChildrenForBulk('Pick a folder of tokutens (archives or extracted)');
+            if (paths.length) await bulkCreateTokutens(paths);
         }
 
         // === Items detail-panel edit mode (drama_cd / tokuten) ===
@@ -2306,6 +2359,39 @@ const app = createApp({
                     const base = parts[parts.length - 1] || '';
                     const stripped = _stripArchiveExtension(base);
                     if (stripped) detailDraft.value.title = stripped;
+                }
+            } catch (err) {
+                detailSaveError.value = 'Browse failed: ' + (err.message || err);
+            } finally {
+                archiveBrowseBusy.value = false;
+            }
+        }
+        async function browseFolderPath() {
+            // Point a manual entry at a folder of already-extracted loose audio
+            // instead of an archive. The backend stores each audio file inside
+            // and indexes them in place (no extraction, no copy).
+            if (!detailDraft.value || archiveBrowseBusy.value) return;
+            archiveBrowseBusy.value = true;
+            try {
+                const resp = await fetch('/api/system/pick-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: 'Pick a folder of extracted audio' }),
+                });
+                if (!resp.ok) {
+                    const detail = await resp.json().catch(() => ({}));
+                    throw new Error(detail.detail || ('HTTP ' + resp.status));
+                }
+                const data = await resp.json();
+                if (data.cancelled || !data.path) return;
+                detailDraft.value.archive_path = data.path;
+                // Derive a default title from the folder name unless the user
+                // already typed one.
+                const currentTitle = (detailDraft.value.title || '').trim();
+                if (!currentTitle || currentTitle === '[New Drama CD]') {
+                    const parts = data.path.split(/[\\/]/).filter(Boolean);
+                    const base = parts[parts.length - 1] || '';
+                    if (base) detailDraft.value.title = base;
                 }
             } catch (err) {
                 detailSaveError.value = 'Browse failed: ' + (err.message || err);
@@ -9087,6 +9173,35 @@ const app = createApp({
             playerTheme.value = theme;
         }
 
+        // Codecs that carry a reliable duration header and play natively on
+        // mobile — these never need the AAC transcode (and never drift).
+        const _LOSSY_CODEC_RE = /^(mp3|aac|m4a|mp4|ogg|opus)$/i;
+        function _isLosslessCodec(codec) {
+            const c = String(codec || '').toLowerCase();
+            return !!c && !_LOSSY_CODEC_RE.test(c);
+        }
+        // For mobile playback of a lossless (FLAC/WAV) track, prefer a lossy
+        // sibling of the SAME recording + variant if one was extracted: it
+        // plays instantly with correct sync and needs no transcode. Returns
+        // the id of the track whose audio file we should actually stream.
+        function _resolveMobileAudioTrackId(trackId) {
+            if (!isMobileClient()) return trackId;
+            const tracks = playerAvailableTracks.value || [];
+            const picked = tracks.find(t => t.id === trackId);
+            if (!picked || !_isLosslessCodec(picked.codec)) return trackId;
+            const group = (playerAvailableGroups.value || []).find(
+                g => g.tracks.some(t => t.id === trackId)
+            );
+            if (!group) return trackId;
+            const pickedVariant = (group.tracks.find(t => t.id === trackId) || {})._variant;
+            // Lowest _codecRank wins among same-variant lossy siblings (mp3
+            // outranks aac/ogg etc. per CODEC_RANK), matching desktop ordering.
+            const sibling = group.tracks
+                .filter(t => !_isLosslessCodec(t.codec) && (t._variant || 'sfx') === (pickedVariant || 'sfx'))
+                .sort((a, b) => _codecRank(a.codec) - _codecRank(b.codec))[0];
+            return sibling ? sibling.id : trackId;
+        }
+
         async function loadPlayerTrack(trackId, transcriptRunId = null, translationRunId = null) {
             try {
                 pipelineBusy.value = true;
@@ -9163,12 +9278,18 @@ const app = createApp({
                     }
                 }
 
-                // Load audio. Mobile devices get an AAC transcode at 48kHz
-                // because source-rate FLAC drifts against their output clock
-                // over the length of a track (linear resampler drift). Desktop
-                // keeps native FLAC for fidelity.
-                const audioBase = `/api/pipeline/player/audio/${trackId}`;
-                const audioUrl = isMobileClient() ? `${audioBase}?format=aac` : audioBase;
+                // Load audio. Desktop streams the native file (FLAC for
+                // fidelity). On mobile we first try to play a lossy sibling of
+                // the same recording (instant, no transcode, no drift); only a
+                // lossless track with NO lossy sibling falls back to the
+                // on-the-fly AAC transcode, whose +faststart container rewrite
+                // is what stops mobile subtitle drift. Setting src + load() now
+                // (at selection, before play) also warms that transcode cache.
+                const audioTrackId = _resolveMobileAudioTrackId(trackId);
+                const playTrack = (playerAvailableTracks.value || []).find(t => t.id === audioTrackId);
+                const needsTranscode = isMobileClient() && _isLosslessCodec(playTrack?.codec);
+                const audioBase = `/api/pipeline/player/audio/${audioTrackId}`;
+                const audioUrl = needsTranscode ? `${audioBase}?format=aac` : audioBase;
                 if (playerAudioElement.value) {
                     playerAudioElement.value.src = audioUrl;
                     playerAudioElement.value.load();
@@ -9415,9 +9536,10 @@ const app = createApp({
             loadTokutenScanPaths, saveTokutenScanPaths, scanTokutens,
             createBlankDramaCd, createBlankGame,
             bulkCreateDramaCds, bulkCreateGames, bulkCreateTokutens,
+            bulkCreateDramaCdsFromFolder, bulkCreateGamesFromFolder, bulkCreateTokutensFromFolder,
             detailEditing, detailDraft, detailSavingBusy, detailSaveError,
             startDetailEdit, cancelDetailEdit, saveDetailEdit,
-            archiveBrowseBusy, browseArchivePath,
+            archiveBrowseBusy, browseArchivePath, browseFolderPath,
             // Tokuten ↔ game cross-link refs + navigation helpers.
             linkedTokutenForItem, linkedGameForTokuten, linkedTokutensForGame,
             openLinkedGame, openLinkedTokuten,

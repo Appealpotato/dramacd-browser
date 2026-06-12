@@ -112,64 +112,126 @@ def _iter_scannable_files(paths: list[Path], recursive: bool):
                 yield entry
 
 
+def _coded_ancestor(rel_parts: tuple[str, ...]):
+    """Given the directory components of a file relative to the scan root
+    (outermost first), return (code, original, confidence, depth_index) of the
+    NEAREST ancestor folder whose NAME carries a product code, or None.
+
+    Nearest wins so `[RJ111]/[RJ222]/track.mp3` is claimed under RJ222."""
+    for i in range(len(rel_parts) - 1, -1, -1):
+        code, original, confidence = extract_product_code(rel_parts[i])
+        if code is not None:
+            return code, original, confidence, i
+    return None
+
+
 def _collect_folder_imports(roots: list[Path]) -> tuple[list[dict], list[dict]]:
-    """Codeless-collection support over TOP-LEVEL folders of each scan root.
-    Returns (manual_imports, coded_folder_items):
+    """Codeless-collection support over the whole folder TREE of each scan
+    root (nested at any depth). Returns (manual_imports, coded_folder_items):
 
-    - Folder with NO code anywhere (name or members) holding audio/archives
-      → one manual-entry candidate (title from the folder name, contained
-      archives + loose audio as absolute file paths).
-    - Folder whose NAME carries a DLsite code but whose members don't →
-      claimed as that coded item (the standard fetch flow takes over).
+    - A codeless audio/archive file whose NEAREST ancestor folder name carries
+      a DLsite code — at ANY depth, e.g. `Circle/[RJ123456]/track01.mp3` — is
+      claimed as that coded item, and the standard fetch flow takes over. Files
+      under the same code (across sibling/format/disc folders) merge into one.
+    - A codeless file with NO coded ancestor folder is grouped under its
+      TOP-LEVEL folder as a single manual-entry candidate (title from that
+      folder name).
 
-    Folders containing any coded FILE are skipped entirely — those files
-    are claimed by the normal per-file flow and the rest stays unmatched."""
+    A codeless file falls back to a manual import ONLY if its top-level folder
+    holds no coded FILE anywhere in its subtree; a top-level folder that mixes
+    a coded archive with stray loose files leaves those strays unmatched (the
+    coded archive is the normal flow's, and the strays are treated as junk).
+
+    Files whose own NAME carries a code are ignored here — the per-file flow
+    already claims them."""
     scannable = ARCHIVE_EXTENSIONS | AUDIO_EXTENSIONS
-    imports: list[dict] = []
-    coded: list[dict] = []
+    coded_by_code: dict[str, dict] = {}
+    manual_by_top: dict[str, dict] = {}
+
     for root in roots:
         try:
-            top_dirs = [d for d in root.iterdir() if d.is_dir()]
+            walk = list(root.rglob("*"))
         except OSError:
             continue
-        for folder in top_dirs:
-            code, original, confidence = extract_product_code(folder.name)
-            files: list[Path] = []
-            any_coded_member = False
+
+        # Pass 1: gather codeless scannable files (with their dir chain) and
+        # note which top-level folders contain a coded FILE — those folders are
+        # owned by the per-file flow, so their stray codeless members stay
+        # unmatched rather than becoming a bogus manual import.
+        codeless: list[tuple[Path, tuple[str, ...]]] = []
+        owned_tops: set[str] = set()
+        for p in walk:
             try:
-                for p in folder.rglob("*"):
-                    if not p.is_file() or p.suffix.lower() not in scannable:
-                        continue
-                    member_code, _o, _c = extract_product_code(p.name)
-                    if member_code is not None:
-                        any_coded_member = True
-                        break
-                    files.append(p)
+                if not p.is_file() or p.suffix.lower() not in scannable:
+                    continue
+                rel_parts = p.relative_to(root).parts[:-1]  # directory names
+            except (OSError, ValueError):
+                continue
+            if extract_product_code(p.name)[0] is not None:
+                if rel_parts:
+                    owned_tops.add(str(root / rel_parts[0]))
+                continue
+            codeless.append((p, rel_parts))
+
+        # Pass 2: claim each codeless file under its nearest coded ancestor
+        # folder, else (if its top-level folder isn't owned) as a manual import.
+        for p, rel_parts in codeless:
+            if not rel_parts:
+                continue  # loose file sitting directly in the scan root
+            try:
+                size = p.stat().st_size
             except OSError:
+                size = 0
+            fmt = extract_audio_format(p.name)
+
+            anc = _coded_ancestor(rel_parts)
+            if anc is not None:
+                code, original, confidence, idx = anc
+                entry = coded_by_code.get(code)
+                if entry is None:
+                    coded_folder = root.joinpath(*rel_parts[: idx + 1])
+                    entry = coded_by_code[code] = {
+                        "folder": str(coded_folder),
+                        "product_code": code,
+                        "original_code": original,
+                        "confidence": confidence,
+                        "files": [],
+                        "total_size": 0,
+                        "formats": set(),
+                    }
+                entry["files"].append(str(p))
+                entry["total_size"] += size
+                if fmt:
+                    entry["formats"].add(fmt)
+                if confidence == "high":
+                    entry["confidence"] = "high"
                 continue
-            if any_coded_member or not files:
-                continue
-            files.sort()
-            formats = sorted({
-                fmt for fmt in (extract_audio_format(p.name) for p in files) if fmt
-            })
-            entry = {
-                "folder": str(folder),
-                "title": clean_title(folder.name),
-                "files": [str(p) for p in files],
-                "file_count": len(files),
-                "total_size": sum((p.stat().st_size for p in files), 0),
-                "formats": formats,
-            }
-            if code is not None:
-                entry.update({
-                    "product_code": code,
-                    "original_code": original,
-                    "confidence": confidence,
-                })
-                coded.append(entry)
-            else:
-                imports.append(entry)
+
+            top = str(root / rel_parts[0])
+            if top in owned_tops:
+                continue  # mixed folder: stray codeless members stay unmatched
+            entry = manual_by_top.get(top)
+            if entry is None:
+                entry = manual_by_top[top] = {
+                    "folder": top,
+                    "title": clean_title(rel_parts[0]),
+                    "files": [],
+                    "total_size": 0,
+                    "formats": set(),
+                }
+            entry["files"].append(str(p))
+            entry["total_size"] += size
+            if fmt:
+                entry["formats"].add(fmt)
+
+    def _finalize(entry: dict) -> dict:
+        entry["files"] = sorted(entry["files"])
+        entry["file_count"] = len(entry["files"])
+        entry["formats"] = sorted(entry["formats"])
+        return entry
+
+    imports = [_finalize(e) for e in manual_by_top.values()]
+    coded = [_finalize(e) for e in coded_by_code.values()]
     return imports, coded
 
 

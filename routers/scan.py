@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends
 import database as db
 from database import _basename_lower
 from auth import require_api_key
-from config import ARCHIVE_EXTENSIONS
+from config import ARCHIVE_EXTENSIONS, AUDIO_EXTENSIONS
 from models import FetchMetadataRequest, ScanPathsUpdateRequest, ScanRequest
 from scanner import clean_title, scan_folder_with_progress
 from scraper import fetch_all_metadata, scrape_progress
@@ -23,6 +23,57 @@ router = APIRouter(prefix="/api")
 
 def _now_iso():
     return datetime.utcnow().isoformat() + "Z"
+
+
+async def _auto_index_loose_item(item_id: int, files: list) -> int:
+    """If a scanned item's sources are already-extracted loose audio (absolute
+    paths to existing audio files, no archive), index them in place at scan
+    time — so the item is immediately playable in Atelier without a manual
+    'extract' step that would only re-discover files already sitting on disk.
+
+    Returns the number of tracks indexed, or 0 if the item isn't a pure loose-
+    audio folder, or its tracks are already indexed AND still resolve on disk.
+    If existing tracks are ALL missing on disk (folder renamed / moved / files
+    re-encoded) while the item's current files DO resolve, the stale rows are
+    re-indexed from the valid paths — self-healing after a rename. Best-effort:
+    never raises into the scan loop. Relies on the same in-place indexer the
+    extract job uses, so nothing is copied into the pipeline workspace."""
+    audio_paths = []
+    for f in files or []:
+        try:
+            p = Path(str(f))
+        except Exception:
+            return 0
+        # Any member that isn't an existing absolute audio file means this is
+        # an archive (or filename-only) item — leave it to the normal flow.
+        if not p.is_absolute() or p.suffix.lower() not in AUDIO_EXTENSIONS or not p.is_file():
+            return 0
+        audio_paths.append(p)
+    if not audio_paths:
+        return 0
+    try:
+        existing = await db.get_pipeline_tracks(item_id)
+        if existing:
+            # Leave indexed items alone — UNLESS every track is now missing on
+            # disk. Then the stored paths are stale (the item was renamed/moved
+            # after indexing) and we re-index from the current, valid files.
+            any_on_disk = any(
+                bool((t.get("track_path") or "").strip())
+                and Path(t["track_path"]).is_file()
+                for t in existing
+            )
+            if any_on_disk:
+                return 0
+            logger.info(
+                f"Auto-index: item {item_id} has {len(existing)} stale track(s) "
+                "(none on disk) — re-indexing from current files"
+            )
+        from pipeline.extractor import _index_loose_tracks
+        tracks = _index_loose_tracks(item_id, audio_paths)
+        return await db.replace_pipeline_tracks_for_item(item_id, tracks)
+    except Exception as exc:  # never break ingestion over an optional convenience
+        logger.warning(f"Auto-index of loose item {item_id} failed: {exc}")
+        return 0
 
 
 async def _ingest_bundled_package_entry(payload: dict, archive_path: str, size: int) -> str | None:
@@ -288,13 +339,18 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             stop_event=_scan_stop_event,
         )
 
+        # Auto-indexing already-extracted loose folders only matters when the
+        # pipeline is on (Atelier is where tracks are used). Check once.
+        pipeline_on = await db.get_pipeline_enabled()
+        auto_indexed_items = 0
+
         for item_data in result["items"].values():
             product_code = (item_data.get("product_code") or "").strip().upper()
             original_code = (item_data.get("original_code") or "").strip().upper()
             if product_code in ignored_codes or (original_code and original_code in ignored_codes):
                 continue
 
-            await db.upsert_item(
+            item_id = await db.upsert_item(
                 {
                     "product_code": item_data["product_code"],
                     "original_code": item_data["original_code"],
@@ -305,6 +361,9 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                     "file_format": json.dumps(item_data["formats"]),
                 }
             )
+            if pipeline_on and item_id:
+                if await _auto_index_loose_item(item_id, item_data["files"]):
+                    auto_indexed_items += 1
 
         # Codeless folder imports: each top-level folder of audio/archives
         # without any DLsite-coded member becomes one manual entry (stable
@@ -362,8 +421,19 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             if created:
                 folders_imported += 1
                 logger.info(f"Scan: folder {Path(fi['folder']).name} -> {code} (manual entry)")
+            if pipeline_on:
+                imported_item = await db.get_item_by_product_code(code)
+                if imported_item and await _auto_index_loose_item(
+                    imported_item["id"], fi["files"]
+                ):
+                    auto_indexed_items += 1
         if folders_imported:
             logger.info(f"Scan: {folders_imported} codeless folder(s) imported as manual entries")
+        if auto_indexed_items:
+            logger.info(
+                f"Scan: {auto_indexed_items} already-extracted folder(s) indexed in place "
+                "(no extraction needed)"
+            )
         if folders_skipped_owned:
             logger.info(
                 f"Scan: {folders_skipped_owned} folder(s) skipped — contents already owned by existing entries"

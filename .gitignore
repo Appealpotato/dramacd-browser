@@ -10,6 +10,10 @@ secrets.*
 data/
 !data/.gitkeep
 
+# --- Local library / test media (never commit personal audio) ---
+CDs/
+DramaCD/
+
 # --- Python ---
 __pycache__/
 *.py[cod]

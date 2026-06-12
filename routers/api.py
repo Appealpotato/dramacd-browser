@@ -153,6 +153,36 @@ async def system_pick_file(
     return {"path": picked, "cancelled": False}
 
 
+@router.post("/system/pick-folder")
+async def system_pick_folder(
+    payload: Optional[dict] = None,
+    _auth=Depends(require_api_key),
+):
+    """Pop a native OS folder-picker dialog and return the chosen directory.
+    Used by the manual drama-CD flow so a user can point an entry at a folder
+    of already-extracted loose audio instead of an archive file. Cancellation
+    returns `{"path": null, "cancelled": true}`."""
+    import asyncio
+    from os_utils import pick_directory
+
+    body = payload or {}
+    title = (body.get("title") or "Pick folder").strip() or "Pick folder"
+    initial_dir = body.get("initial_dir") or None
+
+    try:
+        picked = await asyncio.to_thread(
+            pick_directory,
+            title=title,
+            initial_dir=initial_dir,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Folder picker failed: {e}")
+
+    if picked is None:
+        return {"path": None, "cancelled": True}
+    return {"path": picked, "cancelled": False}
+
+
 @router.post("/system/pick-files")
 async def system_pick_files(
     payload: Optional[dict] = None,
@@ -188,6 +218,84 @@ async def system_pick_files(
         raise HTTPException(status_code=500, detail=f"File picker failed: {e}")
 
     return {"paths": picked}
+
+
+@router.post("/system/list-addable-children")
+async def system_list_addable_children(
+    payload: Optional[dict] = None,
+    _auth=Depends(require_api_key),
+):
+    """Enumerate the addable units inside a parent folder for the bulk-add
+    flow, so one folder pick can create many entries — archives AND
+    already-extracted folders, mixed. For each immediate child:
+      - an archive file        → one 'archive' entry,
+      - a subfolder with audio  → one 'folder' entry (indexed in place),
+      - a subfolder of archives → one 'archive' entry per archive inside.
+    Multi-volume RARs collapse to their first part. If the folder itself only
+    holds loose audio (a single extracted CD), it returns one 'folder' entry
+    for the folder. Returns `{"folder", "entries":[{"path","name","kind"}]}`."""
+    from pathlib import Path as _Path
+    from config import ARCHIVE_EXTENSIONS, AUDIO_EXTENSIONS
+    from scanner import get_part_number
+
+    body = payload or {}
+    folder = str(body.get("folder") or "").strip()
+    if not folder:
+        raise HTTPException(status_code=400, detail="No folder provided")
+    root = _Path(folder).expanduser()
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="Folder does not exist or is not a directory")
+
+    def _is_continuation(name: str) -> bool:
+        # Multi-volume RAR: keep .part1, drop .part2+ (RAR streams the rest).
+        pn = get_part_number(name)
+        return pn is not None and pn != 1
+
+    def _has_audio(base: _Path) -> bool:
+        try:
+            for f in base.rglob("*"):
+                if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS:
+                    return True
+        except OSError:
+            pass
+        return False
+
+    def _archives_in(base: _Path) -> list:
+        out = []
+        try:
+            for f in base.rglob("*"):
+                if f.is_file() and f.suffix.lower() in ARCHIVE_EXTENSIONS and not _is_continuation(f.name):
+                    out.append(f)
+        except OSError:
+            pass
+        return sorted(out, key=lambda p: str(p).lower())
+
+    entries = []
+    try:
+        children = sorted(root.iterdir(), key=lambda c: c.name.lower())
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Cannot read folder: {e}")
+
+    for child in children:
+        try:
+            if child.is_file():
+                if child.suffix.lower() in ARCHIVE_EXTENSIONS and not _is_continuation(child.name):
+                    entries.append({"path": str(child), "name": child.name, "kind": "archive"})
+            elif child.is_dir():
+                if _has_audio(child):
+                    entries.append({"path": str(child), "name": child.name, "kind": "folder"})
+                else:
+                    for a in _archives_in(child):
+                        entries.append({"path": str(a), "name": a.name, "kind": "archive"})
+        except OSError:
+            continue
+
+    # Folder pointed straight at a single extracted CD (loose audio at the top
+    # level, no addable children): treat the whole folder as one entry.
+    if not entries and _has_audio(root):
+        entries.append({"path": str(root), "name": root.name, "kind": "folder"})
+
+    return {"folder": str(root), "entries": entries}
 
 
 async def _refetch_metadata(item_id: int, product_code: str):
@@ -651,6 +759,7 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
     if request_format == "anthropic":
         from pipeline.anthropic_compat_translator import (
             _normalize_messages_url,
+            _supports_temperature,
             ANTHROPIC_VERSION,
             DEFAULT_MAX_TOKENS,
         )
@@ -659,8 +768,11 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": DEFAULT_MAX_TOKENS,
-            "temperature": 0.2,
         }
+        # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only send
+        # temperature on models that still accept it.
+        if _supports_temperature(model):
+            request_json["temperature"] = 0.2
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
                 endpoint,
@@ -836,10 +948,20 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
         if request_format == "anthropic":
             from pipeline.anthropic_compat_translator import (
                 _normalize_messages_url,
+                _supports_temperature,
                 ANTHROPIC_VERSION,
                 DEFAULT_MAX_TOKENS,
             )
             endpoint = _normalize_messages_url(base_url)
+            anthropic_body = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": DEFAULT_MAX_TOKENS,
+            }
+            # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only
+            # send temperature on models that still accept it.
+            if _supports_temperature(model):
+                anthropic_body["temperature"] = 0.2
             async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     endpoint,
@@ -848,12 +970,7 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
                         "x-api-key": api_key,
                         "anthropic-version": ANTHROPIC_VERSION,
                     },
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": DEFAULT_MAX_TOKENS,
-                        "temperature": 0.2,
-                    },
+                    json=anthropic_body,
                 )
             if resp.status_code >= 400:
                 raise HTTPException(status_code=502, detail=f"Anthropic upstream error ({resp.status_code}): {resp.text[:300]}")
@@ -1962,6 +2079,19 @@ async def update_item(item_id: int, update: ItemUpdate, _auth=Depends(require_ap
     if "favorite" in data:
         data["favorite"] = 1 if data["favorite"] else 0
     await db.update_item_user_data(item_id, data)
+
+    # If the user just pointed a manual item at a folder of already-extracted
+    # loose audio, index it in place now (no copy) so it's immediately playable
+    # in Atelier without a manual "extract" step — mirrors the on-scan behavior.
+    if "archive_path" in data and await db.get_pipeline_enabled():
+        refreshed = await db.get_item(item_id)
+        try:
+            files = json.loads(refreshed.get("files") or "[]")
+        except (TypeError, ValueError):
+            files = []
+        from routers.scan import _auto_index_loose_item
+        await _auto_index_loose_item(item_id, files)
+
     return await db.get_item(item_id)
 
 

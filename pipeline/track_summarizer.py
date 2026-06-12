@@ -233,10 +233,20 @@ class TrackSummarizer:
         if self.request_format == "anthropic":
             from pipeline.anthropic_compat_translator import (
                 _normalize_messages_url,
+                _supports_temperature,
                 ANTHROPIC_VERSION,
                 DEFAULT_MAX_TOKENS,
             )
             endpoint = _normalize_messages_url(self.base_url)
+            anthropic_body = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": DEFAULT_MAX_TOKENS,
+            }
+            # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only
+            # send temperature on models that still accept it.
+            if _supports_temperature(self.model):
+                anthropic_body["temperature"] = 0.3
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
                     endpoint,
@@ -245,12 +255,7 @@ class TrackSummarizer:
                         "x-api-key": self.api_key,
                         "anthropic-version": ANTHROPIC_VERSION,
                     },
-                    json={
-                        "model": self.model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": DEFAULT_MAX_TOKENS,
-                        "temperature": 0.3,
-                    },
+                    json=anthropic_body,
                 )
             if resp.status_code >= 400:
                 raise RuntimeError(f"openai_compat (anthropic) error: {resp.status_code} {resp.text[:300]}")

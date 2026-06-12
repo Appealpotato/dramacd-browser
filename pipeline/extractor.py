@@ -820,6 +820,35 @@ def _index_tracks_from_dir(item_id: int, extract_root: Path, archives: list[Path
     return tracks
 
 
+def _index_loose_tracks(item_id: int, audio_files: list[Path], start_index: int = 1) -> list[dict]:
+    """Index already-extracted loose audio IN PLACE (no copy into the pipeline
+    workspace), for a folder the user dropped in pre-unzipped. ``track_path``
+    points at the original file and ``extract_root`` at its real folder, so the
+    audio is never duplicated on disk. Both deletion paths (item delete +
+    purge-workspace) only remove dirs inside PIPELINE_EXTRACT_DIR, so the user's
+    source files are safe from those operations."""
+    tracks = []
+    for idx, path in enumerate(sorted(audio_files), start=start_index):
+        probe, probe_error = _probe_audio_metadata(path)
+        tracks.append(
+            {
+                "item_id": item_id,
+                "archive_path": None,
+                "extract_root": str(path.parent),
+                "track_path": str(path),
+                "track_index": idx,
+                "title": path.stem,
+                "duration_seconds": probe.get("duration_seconds"),
+                "codec": probe.get("codec") or path.suffix.lower().lstrip("."),
+                "sample_rate": probe.get("sample_rate"),
+                "channels": probe.get("channels"),
+                "status": "indexed",
+                "error": probe_error,
+            }
+        )
+    return tracks
+
+
 async def run_extraction_job(job_id: int):
     job = await db.get_job(job_id)
     if not job:
@@ -879,6 +908,12 @@ async def run_extraction_job(job_id: int):
         await db.append_job_event(job_id, "error", "Extraction failed", {"error": "source_files_not_found"})
         return
 
+    # Already-extracted loose audio (a folder the user dropped in pre-unzipped)
+    # is indexed IN PLACE — never copied into the workspace, so it isn't
+    # duplicated on disk. Only real archives go through extraction.
+    loose_audio = [a for a in archives if a.suffix.lower() in AUDIO_EXTENSIONS]
+    real_archives = [a for a in archives if a.suffix.lower() not in AUDIO_EXTENSIONS]
+
     # If a source archive is NEWER than what we extracted, the archive changed since the
     # last run (e.g. the merged blob was replaced with proper split tracks). Reusing the
     # old extraction would keep the stale tracks forever, so invalidate the reuse and
@@ -926,15 +961,10 @@ async def run_extraction_job(job_id: int):
         )
         await db.update_job(job_id, completed=completed, current=None)
     else:
-        for archive in archives:
+        for archive in real_archives:
             try:
-                if archive.suffix.lower() in AUDIO_EXTENSIONS:
-                    loose_dir = extract_root / "loose"
-                    loose_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(archive, loose_dir / archive.name)
-                else:
-                    archive_target = extract_root / archive.name
-                    _extract_archive(archive, archive_target)
+                archive_target = extract_root / archive.name
+                _extract_archive(archive, archive_target)
                 completed += 1
                 await db.update_job(job_id, completed=completed, current=archive.name)
             except Exception as exc:
@@ -945,8 +975,14 @@ async def run_extraction_job(job_id: int):
                     "Archive extraction failed",
                     {"archive": str(archive), "error": str(exc)},
                 )
+        # Loose audio needs no extraction — already on disk, indexed in place.
+        if loose_audio:
+            completed += len(loose_audio)
+            await db.update_job(job_id, completed=completed, current=None)
 
-    tracks = _index_tracks_from_dir(item_id=item_id, extract_root=extract_root, archives=archives)
+    tracks = _index_tracks_from_dir(item_id=item_id, extract_root=extract_root, archives=real_archives)
+    if loose_audio:
+        tracks += _index_loose_tracks(item_id, loose_audio, start_index=len(tracks) + 1)
     track_count = await db.replace_pipeline_tracks_for_item(item_id, tracks)
 
     # If the release shipped .vtt/.srt scripts next to the audio, import them as transcript

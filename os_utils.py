@@ -86,17 +86,25 @@ try:
 except Exception:
     pass
 root.update_idletasks()
-kwargs = dict(
-    title=spec.get("title") or "Pick file",
-    initialdir=spec.get("initial_dir") or None,
-    filetypes=[tuple(p) for p in (spec.get("filetypes") or [])],
-)
-if spec.get("multi"):
-    raw = filedialog.askopenfilenames(**kwargs)
-    paths = list(raw) if raw else []
-else:
-    raw = filedialog.askopenfilename(**kwargs)
+if spec.get("directory"):
+    raw = filedialog.askdirectory(
+        title=spec.get("title") or "Pick folder",
+        initialdir=spec.get("initial_dir") or None,
+        mustexist=True,
+    )
     paths = [raw] if raw else []
+else:
+    kwargs = dict(
+        title=spec.get("title") or "Pick file",
+        initialdir=spec.get("initial_dir") or None,
+        filetypes=[tuple(p) for p in (spec.get("filetypes") or [])],
+    )
+    if spec.get("multi"):
+        raw = filedialog.askopenfilenames(**kwargs)
+        paths = list(raw) if raw else []
+    else:
+        raw = filedialog.askopenfilename(**kwargs)
+        paths = [raw] if raw else []
 root.destroy()
 sys.stdout.buffer.write(json.dumps({"paths": paths}).encode("utf-8"))
 """
@@ -184,3 +192,21 @@ def pick_files(
         "multi": True,
     }
     return _run_pick_dialog(spec, timeout=timeout)
+
+
+def pick_directory(
+    *,
+    title: str = "Pick folder",
+    initial_dir: str | None = None,
+    timeout: float = 600.0,
+) -> str | None:
+    """Pop a native OS folder-picker dialog and return the absolute path the
+    user picked, or `None` if they cancelled. Used for pointing a manual entry
+    at a folder of already-extracted loose audio instead of an archive."""
+    spec = {
+        "title": title,
+        "initial_dir": initial_dir,
+        "directory": True,
+    }
+    paths = _run_pick_dialog(spec, timeout=timeout)
+    return paths[0] if paths else None
