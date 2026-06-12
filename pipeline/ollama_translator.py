@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 # Local models on consumer hardware can take minutes on a long chunk.
 OLLAMA_TIMEOUT = 600.0
 
+# Ollama defaults num_ctx to ~4096 and SILENTLY truncates the front of the
+# prompt past that — which eats the instruction block first. Our largest
+# self-contained chunk prompt is ~4k tokens including output, so 16384 gives
+# comfortable headroom; KV-cache cost at 16k is modest for the 8-12B models
+# this path targets.
+OLLAMA_NUM_CTX = 16384
+
 
 def _normalize_ollama_chat_url(base_url: str) -> str:
     """Resolve the user's base URL to ``{root}/api/chat``.
@@ -62,6 +69,7 @@ async def ollama_chat(
     messages: list[dict],
     temperature: float = 0.2,
     timeout: float = OLLAMA_TIMEOUT,
+    num_ctx: int = OLLAMA_NUM_CTX,
 ) -> str:
     """One non-streaming /api/chat round-trip. ``messages`` is OpenAI-style
     ``[{role, content}]``. Sends ``think: false`` so thinking models answer
@@ -76,7 +84,7 @@ async def ollama_chat(
         "messages": messages,
         "stream": False,
         "think": False,
-        "options": {"temperature": temperature},
+        "options": {"temperature": temperature, "num_ctx": num_ctx},
     }
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(endpoint, json=body)
@@ -120,14 +128,12 @@ class OllamaTrackTranslator(OpenRouterTrackTranslator):
         self.endpoint = _normalize_ollama_chat_url(self.base_url)
 
     async def _send_text(self, text: str) -> str:
-        self._history.append({"role": "user", "content": text})
-        # Ollama has no prompt-cache breakpoints; flatten the marker.
-        cleaned = [
-            {**m, "content": m["content"].replace(CACHE_BREAKPOINT_MARKER, "\n")}
-            if isinstance(m.get("content"), str) else m
-            for m in self._history
-        ]
+        # Stateless: every chunk prompt is self-contained (full instructions +
+        # description + glossary + last-4 prior segments are rebuilt each
+        # call), so the conversation history the cloud translators keep for
+        # prompt caching is pure redundancy here. Resending it grows each
+        # request unboundedly, and once it exceeds num_ctx Ollama silently
+        # drops the FRONT of the prompt — the instruction block — first.
+        messages = [{"role": "user", "content": text.replace(CACHE_BREAKPOINT_MARKER, "\n")}]
         logger.info("[%s] POST %s model=%s", self.provider_label, self.endpoint, self.model)
-        out = await ollama_chat(self.base_url, self.model, cleaned)
-        self._history.append({"role": "assistant", "content": out})
-        return out
+        return await ollama_chat(self.base_url, self.model, messages)
