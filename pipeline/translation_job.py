@@ -438,50 +438,58 @@ async def _run_translation_job_inner(job_id: int):
     processed = 0
     failures = []
 
+    async def _save_partial_run(reason: str) -> int | None:
+        """Persist whatever has been translated so far as a (partial)
+        translation run. Used on user stop AND on chunk failures — a refusal
+        or API error near the end must not throw away every chunk that
+        already succeeded."""
+        if not translated_map:
+            return None
+        partial_segments = []
+        for seg in segments:
+            seg_idx = int(seg["segment_index"])
+            row = translated_map.get(seg_idx)
+            if row:
+                partial_segments.append(row)
+        if not partial_segments:
+            return None
+        try:
+            run_id = await db.create_translation_run(
+                track_id=track_id,
+                transcript_run_id=transcript_run_id,
+                target_language=target_language,
+                source="auto",
+                engine=provider,
+                model=model,
+                prompt="auto_translate_chunked_with_context",
+                segments=partial_segments,
+                metadata={
+                    "created_via": "auto_translation",
+                    "job_id": job_id,
+                    "provider": provider,
+                    "model": model,
+                    "interrupted": True,
+                    "interrupt_reason": reason,
+                    "segments_translated": len(partial_segments),
+                    "total_segments": len(segments),
+                },
+            )
+            await db.set_track_active_translation(track_id, run_id)
+            await db.append_job_event(
+                job_id,
+                "info",
+                f"Partial translation saved with {len(partial_segments)} segments ({reason})",
+                {"translation_run_id": run_id},
+            )
+            return run_id
+        except Exception as e:
+            logger.warning(f"[translation_job] Failed to save partial translation ({reason}): {e}")
+            return None
+
     for idx, chunk in enumerate(chunks, start=1):
         control_state = await _wait_if_paused_or_stopping(job_id)
         if control_state == "stop":
-            # Save partial translations before stopping
-            if translated_map:
-                logger.info(f"[translation_job] Job stopped by user after {len(translated_map)} translated segments")
-                translated_segments = []
-                for seg in segments:
-                    seg_idx = int(seg["segment_index"])
-                    row = translated_map.get(seg_idx)
-                    if row:
-                        translated_segments.append(row)
-
-                if translated_segments:
-                    try:
-                        run_id = await db.create_translation_run(
-                            track_id=track_id,
-                            transcript_run_id=transcript_run_id,
-                            target_language=target_language,
-                            source="auto",
-                            engine=provider,
-                            model=model,
-                            prompt="auto_translate_chunked_with_context",
-                            segments=translated_segments,
-                            metadata={
-                                "created_via": "auto_translation",
-                                "job_id": job_id,
-                                "provider": provider,
-                                "model": model,
-                                "interrupted": True,
-                                "segments_translated": len(translated_segments),
-                                "total_segments": len(segments),
-                            },
-                        )
-                        await db.set_track_active_translation(track_id, run_id)
-                        await db.append_job_event(
-                            job_id,
-                            "info",
-                            f"Partial translation saved with {len(translated_segments)} segments before user stop",
-                            {"translation_run_id": run_id},
-                        )
-                    except Exception as e:
-                        logger.warning(f"[translation_job] Failed to save partial translation on stop: {e}")
-
+            await _save_partial_run("user stop")
             await db.update_job(
                 job_id,
                 status="interrupted",
@@ -499,47 +507,7 @@ async def _run_translation_job_inner(job_id: int):
         for attempt in range(max_retries_per_chunk + 1):
             control_state = await _wait_if_paused_or_stopping(job_id)
             if control_state == "stop":
-                # Save partial translations before stopping
-                if translated_map:
-                    logger.info(f"[translation_job] Job stopped by user during retry after {len(translated_map)} translated segments")
-                    translated_segments = []
-                    for seg in segments:
-                        seg_idx = int(seg["segment_index"])
-                        row = translated_map.get(seg_idx)
-                        if row:
-                            translated_segments.append(row)
-
-                    if translated_segments:
-                        try:
-                            run_id = await db.create_translation_run(
-                                track_id=track_id,
-                                transcript_run_id=transcript_run_id,
-                                target_language=target_language,
-                                source="auto",
-                                engine=provider,
-                                model=model,
-                                prompt="auto_translate_chunked_with_context",
-                                segments=translated_segments,
-                                metadata={
-                                    "created_via": "auto_translation",
-                                    "job_id": job_id,
-                                    "provider": provider,
-                                    "model": model,
-                                    "interrupted": True,
-                                    "segments_translated": len(translated_segments),
-                                    "total_segments": len(segments),
-                                },
-                            )
-                            await db.set_track_active_translation(track_id, run_id)
-                            await db.append_job_event(
-                                job_id,
-                                "info",
-                                f"Partial translation saved with {len(translated_segments)} segments before user stop",
-                                {"translation_run_id": run_id},
-                            )
-                        except Exception as e:
-                            logger.warning(f"[translation_job] Failed to save partial translation on stop: {e}")
-
+                await _save_partial_run("user stop")
                 await db.update_job(
                     job_id,
                     status="interrupted",
@@ -637,22 +605,41 @@ async def _run_translation_job_inner(job_id: int):
             await db.append_job_event(
                 job_id,
                 "error",
-                f"Chunk {idx} failed",
+                f"Chunk {idx} failed — continuing with remaining chunks",
                 {"error": last_error or "unknown error"},
             )
-            break
+            # A refusal/parse failure is usually specific to THIS chunk's
+            # content — keep going so one bad chunk doesn't sink the track.
+            continue
 
     if failures:
-        await db.update_job(
-            job_id,
-            status="failed",
+        # Save what DID translate before reporting the failure. Previously a
+        # mid-job refusal returned here without saving, discarding every
+        # chunk that had already succeeded.
+        partial_run_id = await _save_partial_run(
+            f"{len(failures)} chunk(s) failed; first error: {str(failures[0]['error'])[:120]}"
+        )
+        job_kwargs = dict(
+            status="interrupted" if partial_run_id else "failed",
             stopped=1,
             completed=processed,
             failed=len(failures),
             errors_json=failures,
             finished_at=datetime.now().isoformat(),
-            error=failures[0]["error"],
+            error=(
+                f"{len(failures)}/{len(chunks)} chunk(s) failed"
+                + (f" — partial translation saved ({len(translated_map)} segments)" if partial_run_id else "")
+                + f": {failures[0]['error']}"
+            ),
         )
+        if partial_run_id:
+            job_kwargs["result_json"] = {
+                "track_id": track_id,
+                "transcript_run_id": transcript_run_id,
+                "translation_run_id": partial_run_id,
+                "failed_chunks": [f["chunk"] for f in failures],
+            }
+        await db.update_job(job_id, **job_kwargs)
         return
 
     translated_segments = []
