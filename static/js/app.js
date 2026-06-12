@@ -6635,6 +6635,51 @@ const app = createApp({
             _playerExtractTimer = setTimeout(poll, 2000);
         }
 
+        // Watch an Atelier-queued extraction until it lands, then reload the
+        // track list — same treatment the transcription/translation pollers
+        // and the Player-tab extract already get. Without this the Track
+        // Selection list stays blank until a manual page refresh.
+        let _atelierExtractTimer = null;
+        function _watchExtractionForItem(itemId) {
+            if (_atelierExtractTimer) {
+                clearTimeout(_atelierExtractTimer);
+                _atelierExtractTimer = null;
+            }
+            const numericId = Number(itemId);
+            let polls = 0;
+            const poll = async () => {
+                // User moved to another CD — stop minding this job.
+                if (Number(pipelineSelectedItemId.value) !== numericId) return;
+                polls += 1;
+                try {
+                    const resp = await fetch(`/api/pipeline/items/${numericId}/extract/status`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        const st = data.status;
+                        if (st === 'completed') {
+                            // Stale cache would show the pre-extraction (empty)
+                            // archive listing in the viewer.
+                            archiveContentsCache.delete(numericId);
+                            pipelineActiveSummary.value = '✓ Extraction complete';
+                            pushToast({ kind: 'success', title: 'Extraction complete', ttl: 3000 });
+                            await loadPipelineTracksForItem();
+                            return;
+                        }
+                        if (st === 'failed' || st === 'stopped') {
+                            pipelineLoadError.value = (data.job && data.job.error) || 'Extraction failed';
+                            return;
+                        }
+                    }
+                } catch (_) { /* transient — keep polling */ }
+                if (polls >= 300) { // ~10 min safety cap
+                    pipelineLoadError.value = 'Extraction is taking unusually long — check the activity drawer';
+                    return;
+                }
+                _atelierExtractTimer = setTimeout(poll, 2000);
+            };
+            _atelierExtractTimer = setTimeout(poll, 2000);
+        }
+
         async function queueExtractionForCurrentItem() {
             if (!pipelineSelectedItemId.value) {
                 pipelineLoadError.value = 'Enter a valid item id';
@@ -6645,7 +6690,8 @@ const app = createApp({
             try {
                 const ok = await queueExtractionForItem(pipelineSelectedItemId.value, pipelineForceExtract.value);
                 if (!ok) return;
-                pipelineActiveSummary.value = `Queued extraction for item ${pipelineSelectedItemId.value}`;
+                pipelineActiveSummary.value = `Extracting item ${pipelineSelectedItemId.value}…`;
+                _watchExtractionForItem(pipelineSelectedItemId.value);
             } catch (err) {
                 pipelineLoadError.value = 'Failed to queue extraction';
                 console.error('Failed to queue extraction:', err);
