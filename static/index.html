@@ -2644,6 +2644,25 @@
                                     </div>
                                 </div>
 
+                                <!-- Pin a canon romanization ahead of time: JP name -> EN spelling.
+                                     Future imports + metadata translations use it immediately;
+                                     existing JP-copy slots get backfilled on pin. -->
+                                <div class="seiyuu-backfill-block" style="margin: 4px 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2, rgba(127,127,127,0.06));">
+                                    <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;">
+                                        <strong style="font-size:12px;">Pin canon spelling</strong>
+                                        <span style="color: var(--text-muted); font-size: 11px;">
+                                            Lock a JP name to one romanization — translations and imports will always use it.
+                                        </span>
+                                    </div>
+                                    <div class="quick-row" style="margin-top:6px;">
+                                        <input type="text" v-model="seiyuuPinJp" placeholder="JP name (e.g. 茶介)" style="flex:1">
+                                        <input type="text" v-model="seiyuuPinEn" placeholder="EN spelling (e.g. Chasuke)" style="flex:1">
+                                        <button class="btn btn-primary" @click="pinSeiyuu" :disabled="seiyuuPinBusy">
+                                            {{ seiyuuPinBusy ? 'Pinning...' : 'Pin' }}
+                                        </button>
+                                    </div>
+                                </div>
+
                                 <div v-if="seiyuuSuggestions.length" class="seiyuu-suggest-block">
                                     <div class="maintenance-list-title" style="display:flex; align-items:baseline; gap:8px;">
                                         <span>Auto-suggested groups</span>
@@ -2707,7 +2726,7 @@
                                 <div v-else-if="!seiyuuLoading" style="color: var(--text-muted); padding: 8px; font-size: 12px;">
                                     No seiyuu translated yet. Run Fetch Metadata + EN translation first.
                                 </div>
-                                <div v-if="seiyuuSelected.length >= 2" class="seiyuu-merge-bar">
+                                <div v-if="seiyuuSelected.length >= 1" class="seiyuu-merge-bar">
                                     <!-- JP-name confirmation. If every selected EN variant is paired
                                          with the same JP name(s), this is almost certainly the same
                                          person. If JP differs, render a warning so the user can
@@ -2725,12 +2744,15 @@
                                         </div>
                                     </div>
                                     <label style="font-size: 11px; color: var(--text-muted); margin-top: 8px; display: block;">Canonical name (the one to keep):</label>
-                                    <select v-model="seiyuuCanonical">
+                                    <select v-model="seiyuuCanonical" :disabled="!!seiyuuCanonicalCustom.trim()">
                                         <option value="">— pick one —</option>
                                         <option v-for="name in seiyuuSelected" :key="name" :value="name">
                                             {{ name }}<template v-if="(seiyuuJpNamesFor(name) || []).length"> ({{ seiyuuJpNamesFor(name).join(', ') }})</template>
                                         </option>
                                     </select>
+                                    <input type="text" v-model="seiyuuCanonicalCustom"
+                                           placeholder="…or type a new spelling (renames every selected one to it)"
+                                           style="margin-top: 4px; width: 100%;">
                                     <div class="quick-row" style="margin-top:6px">
                                         <button class="btn btn-secondary"
                                                 @click="previewSeiyuuMerge"
@@ -4312,7 +4334,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=164"></script>
+    <script src="/static/js/app.js?v=165"></script>
 </body>
 </html>
 

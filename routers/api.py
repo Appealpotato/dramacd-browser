@@ -17,6 +17,7 @@ from models import (
     BulkOverrideRequest,
     AiSettingsUpdateRequest,
     SeiyuuMergeRequest,
+    SeiyuuPinRequest,
     WhisperSettingsUpdateRequest,
 )
 from scraper import fetch_metadata_for_code
@@ -2293,6 +2294,14 @@ async def translate_item_metadata(item_id: int, _auth=Depends(require_api_key)):
     except Exception:
         existing_seiyuu_en = []
     if seiyuu_en:
+        # Enforce the library's canon spellings (pins + merge aliases) over
+        # whatever romanization the model picked this time — fresh
+        # translations must not re-randomize names the user standardized.
+        try:
+            seiyuu_en, _normalized = await db.normalize_translated_seiyuu(seiyuu_ja, seiyuu_en)
+        except Exception:
+            pass
+    if seiyuu_en:
         updated = await db.set_item_english_metadata(
             item_id,
             title_en=title_en or item.get("title_en"),
@@ -2318,6 +2327,107 @@ async def translate_item_metadata(item_id: int, _auth=Depends(require_api_key)):
         "seiyuu_en": updated.get("seiyuu_en"),
         "item": updated,
     }
+
+
+async def _run_bulk_metadata_translation(job_id: int):
+    """Background worker for bulk metadata translation. One job row covers
+    the whole batch; per-item outcomes land in job events so the Activity
+    drawer shows live progress."""
+    job = await db.get_job(job_id)
+    if not job:
+        return
+    metadata = job.get("metadata_json") or {}
+    item_ids = [int(i) for i in (metadata.get("item_ids") or [])]
+    await db.update_job(
+        job_id,
+        status="running",
+        started_at=datetime.now().isoformat(),
+        total=len(item_ids),
+        completed=0,
+    )
+    ok = 0
+    failed = 0
+    skipped = 0
+    for idx, item_id in enumerate(item_ids, start=1):
+        job_now = await db.get_job(job_id)
+        if not job_now or str(job_now.get("status") or "").lower() in {"stopping", "stopped"}:
+            await db.update_job(
+                job_id, status="stopped", stopped=1,
+                completed=idx - 1, finished_at=datetime.now().isoformat(),
+            )
+            await db.append_job_event(job_id, "info", "Stopped by user", {"done": idx - 1})
+            return
+        item = await db.get_item(item_id) or {}
+        label = item.get("product_code") or f"#{item_id}"
+        title = str(item.get("title") or "")[:60]
+        try:
+            result = await translate_item_metadata(item_id)
+            ok += 1
+            await db.append_job_event(
+                job_id,
+                "info",
+                f"{label} — translated",
+                {
+                    "item_id": item_id,
+                    "title": title,
+                    "provider_used": result.get("provider_used"),
+                    "title_en": str(result.get("title_en") or "")[:80],
+                },
+            )
+        except HTTPException as exc:
+            if exc.status_code == 400 and "No JP title" in str(exc.detail):
+                skipped += 1
+                await db.append_job_event(
+                    job_id, "info", f"{label} — skipped (no JP metadata)", {"item_id": item_id}
+                )
+            else:
+                failed += 1
+                await db.append_job_event(
+                    job_id, "warn", f"{label} — failed",
+                    {"item_id": item_id, "error": str(exc.detail)[:300]},
+                )
+        except Exception as exc:
+            failed += 1
+            await db.append_job_event(
+                job_id, "warn", f"{label} — failed",
+                {"item_id": item_id, "error": str(exc)[:300]},
+            )
+        await db.update_job(job_id, completed=idx, current=f"{idx}/{len(item_ids)}")
+    summary = {"ok": ok, "failed": failed, "skipped": skipped, "total": len(item_ids)}
+    await db.update_job(
+        job_id,
+        status="completed" if ok or skipped or not failed else "failed",
+        stopped=1,
+        completed=len(item_ids),
+        finished_at=datetime.now().isoformat(),
+        result_json=summary,
+        error=(f"{failed}/{len(item_ids)} item(s) failed" if failed else None),
+    )
+    await db.append_job_event(job_id, "info", "Metadata translation finished", summary)
+
+
+@router.post("/items/bulk/translate-metadata")
+async def bulk_translate_metadata(
+    request: BulkIdsRequest,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(require_api_key),
+):
+    """Queue ONE background job that translates metadata for every given item.
+    Unlike the old per-item loop in the frontend, this shows up in the
+    Activity drawer with live per-item progress."""
+    item_ids = sorted({int(i) for i in (request.item_ids or []) if int(i) > 0})
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="item_ids must be non-empty")
+    job_id = await db.create_job(
+        "pipeline_metadata_translate",
+        status="queued",
+        metadata={"item_ids": item_ids, "queued_at": datetime.now().isoformat()},
+    )
+    await db.append_job_event(
+        job_id, "info", "Metadata translation queued", {"item_count": len(item_ids)}
+    )
+    background_tasks.add_task(_run_bulk_metadata_translation, job_id)
+    return {"status": "queued", "job_id": job_id, "item_count": len(item_ids)}
 
 
 @router.put("/items/{item_id}/cover")
@@ -2616,6 +2726,21 @@ async def backfill_seiyuu_romanizations(
     romanizations already known elsewhere in the library (exact JP match).
     ``dry_run=true`` (default) previews the changes without writing."""
     return await db.backfill_seiyuu_romanizations(dry_run=dry_run)
+
+
+@router.post("/seiyuu/pin")
+async def pin_seiyuu(request: SeiyuuPinRequest, _auth=Depends(require_api_key)):
+    """Pin the canonical EN spelling for a JP seiyuu name. Applies to future
+    imports/translations immediately; with backfill=true, also fills existing
+    items whose seiyuu_en still holds the JP copy (won't overwrite slots that
+    already have a different real romanization — use merge for those)."""
+    try:
+        result = await db.pin_seiyuu_romanization(request.canonical_jp, request.canonical_en)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if request.backfill:
+        result["backfill"] = await db.backfill_seiyuu_romanizations(dry_run=False)
+    return result
 
 
 @router.delete("/seiyuu/aliases/{alias}")

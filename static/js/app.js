@@ -883,6 +883,10 @@ const app = createApp({
         const seiyuuFilter = ref('');
         const seiyuuSelected = ref([]);
         const seiyuuCanonical = ref('');
+        const seiyuuCanonicalCustom = ref('');
+        const seiyuuPinJp = ref('');
+        const seiyuuPinEn = ref('');
+        const seiyuuPinBusy = ref(false);
         const seiyuuMergeBusy = ref('');
         const seiyuuMergeMessage = transientRef('', 5000);
         const seiyuuMergeError = transientRef('', 6000);
@@ -926,6 +930,42 @@ const app = createApp({
             return allJp.size <= 1;
         });
 
+        // Pin a JP→EN spelling ahead of time (e.g. 茶介 → Chasuke) so every
+        // future import/translation uses it, and existing JP-copy slots get
+        // backfilled immediately.
+        async function pinSeiyuu() {
+            const jp = String(seiyuuPinJp.value || '').trim();
+            const en = String(seiyuuPinEn.value || '').trim();
+            if (!jp || !en) {
+                seiyuuMergeError.value = 'Pin needs both the JP name and the EN spelling.';
+                return;
+            }
+            seiyuuPinBusy.value = true;
+            seiyuuMergeMessage.value = '';
+            seiyuuMergeError.value = '';
+            try {
+                const resp = await fetch('/api/seiyuu/pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ canonical_jp: jp, canonical_en: en, backfill: true }),
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    seiyuuMergeError.value = data.detail || 'Pin failed';
+                    return;
+                }
+                const filled = data.backfill ? Number(data.backfill.names_filled || 0) : 0;
+                seiyuuMergeMessage.value = `Pinned ${jp} → "${en}".` + (filled ? ` Backfilled ${filled} existing name slot(s).` : '');
+                seiyuuPinJp.value = '';
+                seiyuuPinEn.value = '';
+                await loadSeiyuuInventory();
+            } catch (err) {
+                seiyuuMergeError.value = `Pin request failed: ${err.message || err}`;
+            } finally {
+                seiyuuPinBusy.value = false;
+            }
+        }
+
         async function loadSeiyuuInventory() {
             seiyuuLoading.value = true;
             try {
@@ -965,15 +1005,25 @@ const app = createApp({
         }
 
         async function _runSeiyuuMerge(dryRun) {
-            if (!seiyuuCanonical.value) {
-                seiyuuMergeError.value = 'Pick a canonical name first.';
+            // A typed spelling beats the dropdown — that's how you RENAME a
+            // single wrong spelling to something not yet in the library.
+            const canonical = String(seiyuuCanonicalCustom.value || '').trim() || seiyuuCanonical.value;
+            if (!canonical) {
+                seiyuuMergeError.value = 'Pick a canonical name (or type a new spelling) first.';
                 return;
             }
-            const aliases = seiyuuSelected.value.filter(n => n !== seiyuuCanonical.value);
+            const aliases = seiyuuSelected.value.filter(n => n !== canonical);
             if (!aliases.length) {
-                seiyuuMergeError.value = 'Pick at least one alias different from the canonical name';
+                seiyuuMergeError.value = 'Select at least one spelling different from the canonical name';
                 return;
             }
+            // When every selected spelling maps to one JP name, record it —
+            // this is what lets imports and translations enforce the canon.
+            const jpSet = new Set();
+            for (const n of [...aliases, canonical]) {
+                for (const jp of seiyuuJpNamesFor(n)) jpSet.add(jp);
+            }
+            const canonicalJp = jpSet.size === 1 ? [...jpSet][0] : null;
             seiyuuMergeBusy.value = dryRun ? 'preview' : 'apply';
             seiyuuMergeMessage.value = '';
             seiyuuMergeError.value = '';
@@ -982,8 +1032,9 @@ const app = createApp({
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        canonical_en: seiyuuCanonical.value,
+                        canonical_en: canonical,
                         aliases,
+                        canonical_jp: canonicalJp,
                         dry_run: dryRun,
                     }),
                 });
@@ -996,9 +1047,10 @@ const app = createApp({
                 if (dryRun) {
                     seiyuuMergeMessage.value = `Preview: ${data.items_changed} of ${data.items_touched} item(s) would change.`;
                 } else {
-                    seiyuuMergeMessage.value = `Merged ${aliases.length} alias(es) into "${seiyuuCanonical.value}". ${data.items_changed} item(s) updated.`;
+                    seiyuuMergeMessage.value = `Merged ${aliases.length} spelling(s) into "${canonical}". ${data.items_changed} item(s) updated.`;
                     seiyuuSelected.value = [];
                     seiyuuCanonical.value = '';
+                    seiyuuCanonicalCustom.value = '';
                     await loadSeiyuuInventory();
                     // Refresh the seiyuu filter dropdown elsewhere
                     if (typeof loadSeiyuuList === 'function') {
@@ -3351,30 +3403,25 @@ const app = createApp({
             bulkError.value = '';
 
             try {
-                // Call translate endpoint for each selected item
-                let successCount = 0;
-                let failCount = 0;
-
-                for (const itemId of itemIds) {
-                    try {
-                        const resp = await fetch(`/api/items/${itemId}/translate-metadata`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                        });
-                        if (resp.ok) {
-                            successCount++;
-                        } else {
-                            failCount++;
-                        }
-                    } catch (err) {
-                        failCount++;
-                    }
+                // One background job for the whole batch — it shows up in the
+                // Activity drawer with per-item progress (the old per-item
+                // loop here was invisible to Activity).
+                const resp = await fetch('/api/items/bulk/translate-metadata', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_ids: itemIds }),
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    bulkError.value = data.detail || `Failed to queue translation (${resp.status})`;
+                    return;
                 }
-
-                bulkMessage.value = `Translated ${successCount} items${failCount > 0 ? `, ${failCount} failed` : ''}`;
-                await loadItems();
+                bulkMessage.value = `Queued metadata translation for ${data.item_count} item(s) — check Activity for progress`;
+                // Refresh the grid once the job likely finished a few items;
+                // the Activity drawer polling keeps the rest live.
+                setTimeout(() => { loadItems().catch(() => {}); }, 4000);
             } catch (err) {
-                bulkError.value = 'Failed to translate items: ' + err.message;
+                bulkError.value = 'Failed to queue translation: ' + err.message;
             } finally {
                 bulkLoading.value = false;
             }
@@ -3383,6 +3430,7 @@ const app = createApp({
         // ---------- Activity drawer + toast helpers ----------
         const AUTOPILOT_STAGE_LABELS = {
             metadata_translate: 'Translating metadata',
+            glossary_build: 'Building glossary',
             extract: 'Unpacking audio',
             track_titles_translate: 'Translating track titles',
             transcribe: 'Transcribing',
@@ -3390,6 +3438,7 @@ const app = createApp({
         };
         const AUTOPILOT_STAGE_ORDER = [
             'metadata_translate',
+            'glossary_build',
             'extract',
             'track_titles_translate',
             'transcribe',
@@ -3405,6 +3454,7 @@ const app = createApp({
             pipeline_extract: 'Unpacking audio',
             pipeline_transcribe: 'Transcribing',
             pipeline_translate: 'Translating',
+            pipeline_metadata_translate: 'Translating metadata',
         };
 
         function pipelineJobLabel(job) {
@@ -9721,6 +9771,7 @@ const app = createApp({
             seiyuuBackfillBusy, seiyuuBackfillPreview, seiyuuBackfillMessage, seiyuuBackfillError,
             previewSeiyuuBackfill, applySeiyuuBackfill,
             seiyuuJpNamesFor, seiyuuSelectedJpConsistent,
+            seiyuuCanonicalCustom, seiyuuPinJp, seiyuuPinEn, seiyuuPinBusy, pinSeiyuu,
             activeTab,
             tokutenCreateBusy, tokutenCreateError, createBlankTokuten,
             addMenuOpen,

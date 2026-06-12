@@ -3681,6 +3681,81 @@ async def delete_seiyuu_alias(alias: str) -> bool:
         await db.close()
 
 
+async def pin_seiyuu_romanization(canonical_jp: str, canonical_en: str) -> dict:
+    """Pin the canonical EN spelling for a JP seiyuu name, ahead of any
+    occurrence in the library. Stored as a self-alias row (alias ==
+    canonical_en) carrying the JP→EN mapping, which is exactly what
+    _build_seiyuu_romanization_map reads — so imports, backfill, and
+    metadata translation all start using the pin immediately."""
+    canonical_jp = (canonical_jp or "").strip()
+    canonical_en = (canonical_en or "").strip()
+    if not canonical_jp:
+        raise ValueError("canonical_jp must be non-empty")
+    if not canonical_en:
+        raise ValueError("canonical_en must be non-empty")
+    db = await get_db()
+    try:
+        now = datetime.now().isoformat()
+        await db.execute(
+            """INSERT INTO seiyuu_aliases (alias, canonical_en, canonical_jp, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(alias) DO UPDATE SET
+                   canonical_en = excluded.canonical_en,
+                   canonical_jp = excluded.canonical_jp,
+                   updated_at = excluded.updated_at""",
+            (canonical_en, canonical_en, canonical_jp, now, now),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"canonical_jp": canonical_jp, "canonical_en": canonical_en}
+
+
+async def normalize_translated_seiyuu(seiyuu_jp: list, seiyuu_en: list) -> tuple[list, int]:
+    """Force freshly-translated seiyuu_en spellings onto the library's canon.
+
+    Two passes:
+      1. Alias normalization — if the model produced a spelling recorded as
+         an alias, replace it with its canonical_en.
+      2. Positional JP enforcement — when the JP and EN lists align, any JP
+         name with a known romanization (curated pin > harvested
+         most-frequent) overrides whatever the model invented.
+
+    Without this, every fresh metadata translation could re-randomize a name
+    the user already standardized. Returns (normalized_list, replaced_count)."""
+    seiyuu_en = [str(n or "").strip() for n in (seiyuu_en or [])]
+    seiyuu_jp = [str(n or "").strip() for n in (seiyuu_jp or [])]
+    if not seiyuu_en:
+        return seiyuu_en, 0
+    db = await get_db()
+    try:
+        romaji_map = await _build_seiyuu_romanization_map(db)
+        cursor = await db.execute("SELECT alias, canonical_en FROM seiyuu_aliases")
+        alias_map = {
+            (row["alias"] or "").strip(): (row["canonical_en"] or "").strip()
+            for row in await cursor.fetchall()
+        }
+    finally:
+        await db.close()
+
+    replaced = 0
+    out: list[str] = []
+    aligned = len(seiyuu_jp) == len(seiyuu_en)
+    for idx, name in enumerate(seiyuu_en):
+        new_name = name
+        mapped = alias_map.get(new_name)
+        if mapped and mapped != new_name:
+            new_name = mapped
+        if aligned:
+            pinned = romaji_map.get(seiyuu_jp[idx])
+            if pinned:
+                new_name = pinned
+        if new_name != name:
+            replaced += 1
+        out.append(new_name)
+    return out, replaced
+
+
 async def get_unique_seiyuu(lang: str = "jp") -> list[str]:
     db = await get_db()
     try:

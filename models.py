@@ -173,6 +173,12 @@ class AutoTranscribeRequest(BaseModel):
     track_ids: Optional[list[int]] = None  # Specific tracks to transcribe, or None for all
 
 
+class SeiyuuPinRequest(BaseModel):
+    canonical_jp: str
+    canonical_en: str
+    backfill: bool = True
+
+
 class SeiyuuMergeRequest(BaseModel):
     canonical_en: str
     aliases: list[str]
