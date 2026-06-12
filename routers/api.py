@@ -439,6 +439,18 @@ def _coerce_notes_list(value) -> list[str]:
     return notes
 
 
+async def _metadata_glossary_block() -> str:
+    """Library-wide glossary, formatted for inclusion in the metadata
+    translation prompts (empty string when no glossary is configured)."""
+    try:
+        glossary = await db.get_runtime_global_glossary()
+    except Exception:
+        return ""
+    if not glossary:
+        return ""
+    return f"PREFERRED TERMS / GLOSSARY (apply when relevant):\n{glossary}\n\n"
+
+
 def _unpack_metadata_translation_result(result) -> tuple[str, str, list[str], list[str]]:
     if isinstance(result, tuple):
         if len(result) >= 3:
@@ -482,6 +494,7 @@ async def _translate_title_description_with_gemini(title_ja: str, description_ja
         "CULTURAL NOTES:\n"
         "• cultural_notes should be a short list (0-3 items) written for readers, plain English.\n"
         "• Only include notes for terms/concepts that truly need explanation for English readers.\n\n"
+        f"{await _metadata_glossary_block()}"
         f"title_ja: {title_ja}\n"
         f"description_ja: {description_ja}\n"
         f"seiyuu_ja: {json.dumps(seiyuu_ja, ensure_ascii=False)}"
@@ -567,6 +580,7 @@ async def _translate_title_description_with_openrouter(title_ja: str, descriptio
         "CULTURAL NOTES:\n"
         "• cultural_notes should be a short list (0-3 items) written for readers, plain English.\n"
         "• Only include notes for terms/concepts that truly need explanation for English readers.\n\n"
+        f"{await _metadata_glossary_block()}"
         f"title_ja: {title_ja}\n"
         f"description_ja: {description_ja}\n"
         f"seiyuu_ja: {json.dumps(seiyuu_ja, ensure_ascii=False)}"
@@ -691,6 +705,7 @@ async def _translate_title_description_with_chutes(title_ja: str, description_ja
         "CULTURAL NOTES:\n"
         "• cultural_notes should be a short list (0-3 items) written for readers, plain English.\n"
         "• Only include notes for terms/concepts that truly need explanation for English readers.\n\n"
+        f"{await _metadata_glossary_block()}"
         f"title_ja: {title_ja}\n"
         f"description_ja: {description_ja}\n"
         f"seiyuu_ja: {json.dumps(seiyuu_ja, ensure_ascii=False)}"
@@ -809,6 +824,7 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         "• Return ONLY valid JSON object with keys: title_en, description_en, seiyuu_en, cultural_notes\n"
         "• Escape any double quotes inside string values as \\\" (e.g. quoted nicknames or speech).\n"
         "• No markdown, no code blocks, no commentary—just pure JSON.\n\n"
+        f"{await _metadata_glossary_block()}"
         f"title_ja: {title_ja}\n"
         f"description_ja: {description_ja}\n"
         f"seiyuu_ja: {json.dumps(seiyuu_ja, ensure_ascii=False)}"
@@ -1224,6 +1240,7 @@ async def get_ai_settings():
         "openai_compat_api_key_source": "runtime" if runtime_openai_compat_key else "env",
         "openai_compat_base_url_source": "runtime" if runtime_openai_compat_url else "env",
         "openai_compat_request_format": openai_compat_request_format,
+        "global_glossary": await db.get_runtime_global_glossary(),
     }
 
 
@@ -1406,6 +1423,11 @@ async def update_ai_settings(request: AiSettingsUpdateRequest, _auth=Depends(req
         await db.set_runtime_openai_compat_request_format(clean_fmt)
         updated_fields.append("openai_compat_request_format")
 
+    if request.global_glossary is not None:
+        # Empty string clears it; None leaves it untouched.
+        await db.set_runtime_global_glossary(request.global_glossary)
+        updated_fields.append("global_glossary")
+
     if not updated_fields:
         raise HTTPException(status_code=400, detail="No settings provided")
 
@@ -1432,6 +1454,7 @@ async def update_ai_settings(request: AiSettingsUpdateRequest, _auth=Depends(req
         "chutes_model": chutes_model,
         "chutes_has_api_key": bool(effective_chutes_key),
         "chutes_api_key_source": "runtime" if runtime_chutes_key else "env",
+        "global_glossary": await db.get_runtime_global_glossary(),
     }
 
 
@@ -1940,6 +1963,85 @@ async def set_item_glossary_endpoint(item_id: int, payload: dict, _auth=Depends(
     if not ok:
         raise HTTPException(status_code=404, detail="Item not found")
     return {"item_id": item_id, "glossary": glossary}
+
+
+def _build_auto_glossary_prompt(item: dict) -> str:
+    """One-shot prompt that mines an item's own metadata for translator
+    glossary rules — primarily character/seiyuu name readings, which are
+    the thing every model gets wrong without furigana."""
+
+    def _json_list(value) -> list:
+        try:
+            parsed = json.loads(value or "[]")
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+
+    seiyuu = _json_list(item.get("seiyuu"))
+    tags = _json_list(item.get("tags"))
+    return (
+        "Build a translator glossary for a Japanese drama CD from its metadata below.\n"
+        "Extract ONLY terms that recur and benefit from one fixed translation:\n"
+        "• Character names: kanji → romaji reading. Use furigana, latin spellings, or the\n"
+        "  English description if present to determine readings. If a name's reading is\n"
+        "  ambiguous and nothing in the metadata resolves it, SKIP it — never guess.\n"
+        "• Voice actor (seiyuu) names with their standard romanized stage-name spelling.\n"
+        "• Series, place, organization names, and recurring invented terms.\n"
+        "Do NOT include ordinary vocabulary or one-off phrases.\n\n"
+        "Format: one rule per line, exactly '日本語=English'.\n"
+        "Respond ONLY with valid JSON: {\"glossary\": \"line1\\nline2\"} — use \\n between rules.\n"
+        "If nothing qualifies, return {\"glossary\": \"\"}.\n\n"
+        f"title: {str(item.get('title') or '')}\n"
+        f"title_en: {str(item.get('title_en') or '')}\n"
+        f"series: {str(item.get('series') or '')}\n"
+        f"circle: {str(item.get('circle') or '')}\n"
+        f"seiyuu: {json.dumps(seiyuu, ensure_ascii=False)}\n"
+        f"tags: {json.dumps(tags[:20], ensure_ascii=False)}\n"
+        f"description: {str(item.get('description') or '')[:4000]}\n"
+        f"description_en: {str(item.get('description_en') or '')[:4000]}"
+    )
+
+
+def _coerce_glossary_text(parsed) -> str:
+    """Accept {"glossary": "a=b\\nc=d"}, {"glossary": ["a=b", ...]}, or a bare
+    list/string and normalize to newline-separated rules."""
+    if isinstance(parsed, dict):
+        parsed = parsed.get("glossary", "")
+    if isinstance(parsed, list):
+        parsed = "\n".join(str(x or "").strip() for x in parsed)
+    return str(parsed or "").strip()
+
+
+@router.post("/items/{item_id}/glossary/auto")
+async def auto_build_item_glossary(item_id: int, _auth=Depends(require_api_key)):
+    """Mine the item's metadata for glossary rules (name readings, recurring
+    terms) with one LLM call and MERGE them into the per-item glossary —
+    existing user rules always survive and take precedence (they come first)."""
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    if not any(str(item.get(k) or "").strip() for k in ("title", "description", "seiyuu")):
+        raise HTTPException(status_code=400, detail="Item has no metadata to mine for a glossary")
+
+    raw, provider = await _llm_one_shot_json(_build_auto_glossary_prompt(item))
+    try:
+        parsed = _parse_json_payload(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Glossary model returned invalid JSON — {exc}")
+    suggested = _coerce_glossary_text(parsed)
+
+    existing = await db.get_item_glossary(item_id) or ""
+    merged = db.merge_glossaries(existing, suggested)
+    existing_lines = {l.strip().lower() for l in existing.splitlines() if l.strip()}
+    added = [l for l in merged.splitlines() if l.strip().lower() not in existing_lines]
+    if added:
+        await db.set_item_glossary(item_id, merged)
+    return {
+        "item_id": item_id,
+        "glossary": merged if added else existing,
+        "added_lines": len(added),
+        "provider": provider,
+    }
 
 
 @router.patch("/items/{item_id}/manual-track-count")

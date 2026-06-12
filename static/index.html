@@ -1625,8 +1625,17 @@
                                                       class="glossary-input"
                                                       rows="3"
                                                       placeholder="Glossary (optional) — e.g. 智恵 = Tomoe, 茅 = Chigaya. Sent with every chunk."></textarea>
+                                            <button class="btn btn-sm" style="margin-top: 4px;"
+                                                    @click="autoBuildGlossary" :disabled="glossaryAutoBuildBusy">
+                                                {{ glossaryAutoBuildBusy ? 'Mining metadata…' : 'Auto-build from metadata' }}
+                                            </button>
                                         </div>
                                     </div>
+                                    <label class="pipeline-checkbox" style="display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font-size: 13px;"
+                                           title="Second pass: the model re-reads JP+EN pairs and fixes errors. Roughly doubles job time — great for free local models or overnight runs.">
+                                        <input type="checkbox" v-model="autoTranslateReviewPass">
+                                        Review pass (2nd pass, slower, higher quality)
+                                    </label>
                                     <button class="btn btn-primary" @click="queueAutoTranslation" :disabled="pipelineBusy || !pipelineTrackId || !pipelineTranscriptRunId">
                                         Translate
                                     </button>
@@ -2400,17 +2409,26 @@
                             </div>
                             <div class="card-content" :class="{ collapsed: !apiSectionsOpen.translation }">
                                 <div class="pipeline-controls">
-                                    <label>Max tokens per chunk</label>
-                                    <input type="number" v-model.number="autoTranslateMaxTokens" min="200" max="4000">
+                                    <label>Global glossary</label>
+                                    <textarea v-model="apiGlobalGlossary" rows="4" class="glossary-input"
+                                              @change="saveApiSettings('save')"
+                                              placeholder="Library-wide rules, one per line — e.g. ロマーナ=Romana. Applied to every translation (transcripts AND titles/descriptions), ahead of each item's own glossary."></textarea>
                                     <span class="pipeline-note">
-                                        Bigger chunks send more context in one shot but risk truncation. Default <strong>1000</strong>.
+                                        Saved with the AI settings. Fix recurring quirks once (names, places, series terms) instead of per item.
+                                    </span>
+                                </div>
+                                <div class="pipeline-controls">
+                                    <label>Max tokens per chunk</label>
+                                    <input type="number" v-model.number="autoTranslateMaxTokens" min="200" max="4000" placeholder="auto">
+                                    <span class="pipeline-note">
+                                        Empty = <strong>auto</strong>: 1000 for cloud providers, 3000 for local Ollama (free tokens, more scene continuity per request).
                                     </span>
                                 </div>
                                 <div class="pipeline-controls">
                                     <label>Max lines per chunk</label>
-                                    <input type="number" v-model.number="autoTranslateMaxLines" min="1" max="100">
+                                    <input type="number" v-model.number="autoTranslateMaxLines" min="1" max="100" placeholder="auto">
                                     <span class="pipeline-note">
-                                        Hard cap on segments per chunk regardless of token count. Default <strong>20</strong>.
+                                        Hard cap on segments per chunk. Empty = <strong>auto</strong>: 20 cloud / 60 local Ollama.
                                     </span>
                                 </div>
                                 <div class="pipeline-controls">
@@ -4258,7 +4276,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=160"></script>
+    <script src="/static/js/app.js?v=161"></script>
 </body>
 </html>
 

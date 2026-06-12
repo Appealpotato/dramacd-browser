@@ -330,7 +330,7 @@ class ApiSettingsTests(unittest.TestCase):
         with patch.object(api_router.db, "set_runtime_gemini_api_key", AsyncMock(return_value=True)) as mock_set_key, \
              patch.object(api_router.db, "set_runtime_gemini_model", AsyncMock(return_value="gemini-2.0-flash-lite")) as mock_set_model, \
              patch.object(api_router.db, "set_runtime_translation_provider", AsyncMock(return_value="gemini")) as mock_set_provider, \
-             patch.object(api_router.db, "get_app_setting", AsyncMock(side_effect=["runtime-key", None, None])), \
+             patch.object(api_router.db, "get_app_setting", AsyncMock(side_effect=lambda key: "runtime-key" if key == api_router.db.RUNTIME_GEMINI_API_KEY_SETTING else None)), \
              patch.object(api_router.db, "get_runtime_gemini_api_key", AsyncMock(return_value="runtime-key")), \
              patch.object(api_router.db, "get_runtime_openrouter_api_key", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_chutes_api_key", AsyncMock(return_value=None)), \
@@ -358,7 +358,7 @@ class ApiSettingsTests(unittest.TestCase):
 
     def test_update_ai_settings_clear_runtime_key(self):
         with patch.object(api_router.db, "clear_runtime_gemini_api_key", AsyncMock(return_value=True)) as mock_clear, \
-             patch.object(api_router.db, "get_app_setting", AsyncMock(side_effect=[None, None, None])), \
+             patch.object(api_router.db, "get_app_setting", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_gemini_api_key", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_openrouter_api_key", AsyncMock(return_value=None)), \
              patch.object(api_router.db, "get_runtime_chutes_api_key", AsyncMock(return_value=None)), \

@@ -35,6 +35,7 @@ RUNTIME_OPENAI_COMPAT_MODEL_SETTING = "runtime_openai_compat_model"
 RUNTIME_OPENAI_COMPAT_BASE_URL_SETTING = "runtime_openai_compat_base_url"
 RUNTIME_OPENAI_COMPAT_REQUEST_FORMAT_SETTING = "runtime_openai_compat_request_format"
 RUNTIME_TRANSLATION_PROVIDER_SETTING = "runtime_translation_provider"
+RUNTIME_GLOBAL_GLOSSARY_SETTING = "runtime_global_glossary"
 RUNTIME_WHISPER_MODEL_SETTING = "runtime_whisper_model"
 RUNTIME_WHISPER_VAD_FILTER_SETTING = "runtime_whisper_vad_filter"
 RUNTIME_WHISPER_BEAM_SIZE_SETTING = "runtime_whisper_beam_size"
@@ -1977,6 +1978,36 @@ async def set_runtime_openai_compat_request_format(fmt: str) -> str:
         raise ValueError("Request format must be 'openai', 'anthropic' or 'ollama'")
     await set_app_setting(RUNTIME_OPENAI_COMPAT_REQUEST_FORMAT_SETTING, clean)
     return clean
+
+
+async def get_runtime_global_glossary() -> str:
+    """Library-wide translator glossary ("always translate X as Y"), applied
+    to every translation job and metadata translation in addition to any
+    per-item glossary. One rule per line, free-form text."""
+    value = await get_app_setting(RUNTIME_GLOBAL_GLOSSARY_SETTING)
+    return str(value or "")
+
+
+async def set_runtime_global_glossary(text: str) -> str:
+    # Strip outer whitespace only — internal newlines ARE the format.
+    clean = str(text or "").strip()
+    await set_app_setting(RUNTIME_GLOBAL_GLOSSARY_SETTING, clean)
+    return clean
+
+
+def merge_glossaries(*parts: str | None) -> str:
+    """Combine glossary blocks (global + per-item/per-job) into one text,
+    dropping blank parts and duplicate lines while preserving order."""
+    seen: set[str] = set()
+    lines: list[str] = []
+    for part in parts:
+        for line in str(part or "").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.lower() in seen:
+                continue
+            seen.add(stripped.lower())
+            lines.append(stripped)
+    return "\n".join(lines)
 
 
 async def get_runtime_whisper_model() -> str:

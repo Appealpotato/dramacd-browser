@@ -28,6 +28,71 @@ def _choose_transcript_run_id(metadata: dict, active_outputs: dict) -> int | Non
     return int(active) if active else None
 
 
+def _build_review_prompt(
+    *,
+    target_language: str,
+    description_context: str,
+    glossary: str,
+    pairs: list[dict],
+) -> str:
+    """Second-pass prompt: the model sees JP+EN side by side and returns the
+    FINAL text for every segment — corrected where needed, unchanged where
+    fine. Same JSON contract as translate_chunk so the existing alignment
+    machinery applies."""
+    return (
+        "You are reviewing a Japanese → " + target_language + " drama CD translation.\n"
+        "For EACH segment below you get the Japanese source (ja) and the current translation (tl).\n"
+        "Return the FINAL translation text for every segment:\n"
+        "• Fix mistranslations, dropped content, wrong speaker tone, or unnatural phrasing.\n"
+        "• If the current translation is already good, return it UNCHANGED.\n"
+        "• Do not re-style text that is correct; minimal edits only.\n\n"
+        "CRITICAL REQUIREMENTS:\n"
+        "1. Respond ONLY with valid JSON array: [{\"segment_index\":N,\"text\":\"...\"}]\n"
+        "2. Preserve segment_index values exactly as provided.\n"
+        "3. Return exactly one entry per input segment — never skip any.\n"
+        "4. No markdown, no code blocks, no commentary—just pure JSON.\n\n"
+        f"Drama description (context): {description_context or '(none)'}\n"
+        f"Preferred terms / glossary: {glossary or '(none)'}\n\n"
+        f"SEGMENTS TO REVIEW:\n{json.dumps(pairs, ensure_ascii=False)}\n\n"
+        "Return the JSON array only:"
+    )
+
+
+def _apply_review_rows(
+    expected_indexes: list[int],
+    out_rows: list,
+    translated_map: dict[int, dict],
+) -> int:
+    """Merge review output into translated_map. Only segments the reviewer
+    actually changed are touched; anything missing/empty keeps the original
+    translation (a review failure must never lose first-pass work).
+    Returns the number of segments changed."""
+    changed = 0
+    by_index: dict[int, str] = {}
+    for row in out_rows or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            seg_idx = int(row.get("segment_index"))
+        except (TypeError, ValueError):
+            continue
+        text = str(row.get("text") or "").strip()
+        if text:
+            by_index[seg_idx] = text
+    for seg_idx in expected_indexes:
+        new_text = by_index.get(seg_idx)
+        entry = translated_map.get(seg_idx)
+        if not new_text or not entry:
+            continue
+        if new_text != str(entry.get("text") or ""):
+            entry["text"] = new_text
+            meta = entry.get("meta") or {}
+            meta["reviewed"] = True
+            entry["meta"] = meta
+            changed += 1
+    return changed
+
+
 def _is_retryable_translation_error(exc: Exception) -> bool:
     text = str(exc or "").lower()
     retry_markers = (
@@ -231,13 +296,28 @@ async def _run_translation_job_inner(job_id: int):
         runtime_model = await db.get_runtime_gemini_model()
         runtime_api_key = await db.get_runtime_gemini_api_key()
     model = str(metadata.get("model") or runtime_model).strip() or runtime_model
-    max_tokens = max(200, min(4000, int(metadata.get("max_tokens_per_chunk") or 1000)))
-    max_lines = max(1, min(100, int(metadata.get("max_lines_per_chunk") or 20)))
+    # Auto-size chunks when the caller didn't pin them: cloud providers stay
+    # at the cost-optimized 1000/20, but a local Ollama backend pays nothing
+    # per token — bigger chunks mean more scene continuity per request and
+    # far fewer resends of the ~700-token instruction block. 3000/60 stays
+    # comfortably inside the 16k num_ctx the ollama format requests.
+    _local_backend = provider == "openai_compat" and runtime_request_format == "ollama"
+    _auto_tokens, _auto_lines = (3000, 60) if _local_backend else (1000, 20)
+    max_tokens = max(200, min(4000, int(metadata.get("max_tokens_per_chunk") or _auto_tokens)))
+    max_lines = max(1, min(100, int(metadata.get("max_lines_per_chunk") or _auto_lines)))
     max_retries_per_chunk = max(0, min(6, int(metadata.get("max_retries_per_chunk") or 2)))
     retry_backoff_seconds = max(0.2, min(10.0, float(metadata.get("retry_backoff_seconds") or 1.0)))
     set_active = bool(metadata.get("set_active", True))
+    review_pass = bool(metadata.get("review_pass", False))
     glossary = str(metadata.get("glossary") or "").strip()
     character_memory = str(metadata.get("character_memory") or "").strip()
+    # The library-wide glossary applies to every job, ahead of per-item rules.
+    try:
+        global_glossary = await db.get_runtime_global_glossary()
+    except Exception:
+        global_glossary = ""
+    if global_glossary:
+        glossary = db.merge_glossaries(global_glossary, glossary)
 
     if provider not in db.SUPPORTED_TRANSLATION_PROVIDERS:
         await db.update_job(job_id, status="failed", error=f"Unsupported provider: {provider}")
@@ -642,6 +722,88 @@ async def _run_translation_job_inner(job_id: int):
         await db.update_job(job_id, **job_kwargs)
         return
 
+    review_changed = 0
+    review_failed_chunks = 0
+    if review_pass and translated_map:
+        from pipeline.json_extract import loads_robust
+
+        await db.append_job_event(
+            job_id, "info", "Starting review pass", {"chunks": len(chunks)}
+        )
+        for idx, chunk in enumerate(chunks, start=1):
+            control_state = await _wait_if_paused_or_stopping(job_id)
+            if control_state == "stop":
+                # First-pass translation is complete and intact — a stop
+                # during review just ends the review early and saves what
+                # we have, it must NOT discard the run.
+                await db.append_job_event(
+                    job_id,
+                    "warning",
+                    "Review pass stopped by user — saving translation with partial review",
+                    {"reviewed_chunks": idx - 1, "changed": review_changed},
+                )
+                break
+            expected_indexes = [
+                int(seg["segment_index"])
+                for seg in chunk
+                if int(seg["segment_index"]) in translated_map
+            ]
+            if not expected_indexes:
+                continue
+            pairs = [
+                {
+                    "segment_index": seg_idx,
+                    "ja": next(
+                        str(seg["source_text"])
+                        for seg in chunk
+                        if int(seg["segment_index"]) == seg_idx
+                    ),
+                    "tl": str(translated_map[seg_idx].get("text") or ""),
+                }
+                for seg_idx in expected_indexes
+            ]
+            prompt = _build_review_prompt(
+                target_language=target_language,
+                description_context=description_context,
+                glossary=glossary,
+                pairs=pairs,
+            )
+            try:
+                raw = await translator._send_text(prompt)
+                try:
+                    parsed = loads_robust(raw)
+                except Exception:
+                    parsed = OpenRouterTrackTranslator._extract_json_candidate(raw)
+                rows = OpenRouterTrackTranslator._coerce_rows_payload(parsed)
+                if not isinstance(rows, list):
+                    raise RuntimeError("review output was not a JSON array")
+                chunk_changed = _apply_review_rows(expected_indexes, rows, translated_map)
+                review_changed += chunk_changed
+                await db.update_job(job_id, current=f"review {idx}/{len(chunks)}")
+                if chunk_changed:
+                    await db.append_job_event(
+                        job_id,
+                        "info",
+                        f"Review chunk {idx}/{len(chunks)}: revised {chunk_changed} segment(s)",
+                        {"changed": chunk_changed},
+                    )
+            except Exception as exc:
+                # Review is best-effort: a failed review chunk keeps the
+                # first-pass translation for those segments.
+                review_failed_chunks += 1
+                await db.append_job_event(
+                    job_id,
+                    "warning",
+                    f"Review chunk {idx}/{len(chunks)} failed — keeping first-pass translation",
+                    {"error": str(exc)[:300]},
+                )
+        await db.append_job_event(
+            job_id,
+            "info",
+            f"Review pass finished: {review_changed} segment(s) revised",
+            {"changed": review_changed, "failed_chunks": review_failed_chunks},
+        )
+
     translated_segments = []
     for seg in segments:
         seg_idx = int(seg["segment_index"])
@@ -675,6 +837,8 @@ async def _run_translation_job_inner(job_id: int):
             "retry_backoff_seconds": retry_backoff_seconds,
             "glossary_used": bool(glossary),
             "character_memory_used": bool(character_memory),
+            "review_pass": bool(review_pass),
+            "review_changed": review_changed,
         },
     )
     if set_active:

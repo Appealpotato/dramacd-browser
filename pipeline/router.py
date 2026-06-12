@@ -149,6 +149,7 @@ async def queue_item_autopilot(
         retry_backoff_seconds=request.retry_backoff_seconds,
         glossary=request.glossary,
         character_memory=request.character_memory,
+        review_pass=request.review_pass,
         transcribe_language=request.transcribe_language,
         transcribe_model=request.transcribe_model,
         skip_stages=request.skip_stages,
@@ -864,6 +865,7 @@ async def queue_track_auto_translation(
         set_active=request.set_active,
         glossary=request.glossary,
         character_memory=request.character_memory,
+        review_pass=request.review_pass,
     )
     background_tasks.add_task(run_translation_job, job_id)
     return {
@@ -962,12 +964,13 @@ async def restart_pipeline_autopilot_job(
         target_language=metadata.get("target_language") or "en",
         provider=metadata.get("provider"),
         model=metadata.get("model"),
-        max_tokens_per_chunk=int(metadata.get("max_tokens_per_chunk") or 1000),
-        max_lines_per_chunk=int(metadata.get("max_lines_per_chunk") or 20),
+        max_tokens_per_chunk=metadata.get("max_tokens_per_chunk"),
+        max_lines_per_chunk=metadata.get("max_lines_per_chunk"),
         max_retries_per_chunk=int(metadata.get("max_retries_per_chunk") or 2),
         retry_backoff_seconds=float(metadata.get("retry_backoff_seconds") or 1.0),
         glossary=metadata.get("glossary"),
         character_memory=metadata.get("character_memory"),
+        review_pass=bool(metadata.get("review_pass", False)),
         transcribe_language=metadata.get("transcribe_language") or "ja",
         transcribe_model=metadata.get("transcribe_model"),
         skip_stages=list(metadata.get("skip_stages") or []),

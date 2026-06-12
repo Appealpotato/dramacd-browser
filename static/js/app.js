@@ -832,12 +832,19 @@ const app = createApp({
         const autoTranslateTargetLanguage = ref('en');
         const autoTranslateProvider = ref('gemini');
         const autoTranslateModel = ref('gemini-2.0-flash');
-        const autoTranslateMaxTokens = ref(1000);
-        const autoTranslateMaxLines = ref(20);
+        // Empty = auto: the backend sizes chunks for the resolved provider
+        // (bigger for free local Ollama backends, 1000/20 for cloud).
+        const autoTranslateMaxTokens = ref('');
+        const autoTranslateMaxLines = ref('');
         const autoTranslateMaxRetries = ref(2);
         const autoTranslateRetryBackoff = ref(1.0);
         const autoTranslateGlossary = ref('');
         const autoTranslateCharacterMemory = ref('');
+        const autoTranslateReviewPass = ref(localStorage.getItem('autoTranslateReviewPass') === '1');
+        watch(autoTranslateReviewPass, (v) => {
+            try { localStorage.setItem('autoTranslateReviewPass', v ? '1' : '0'); } catch (e) {}
+        });
+        const glossaryAutoBuildBusy = ref(false);
         const autoTranslateStatus = ref(null);
         const autoTranslateInProgress = ref(false);
         const autoTranslateProgress = ref(null);
@@ -847,6 +854,9 @@ const app = createApp({
         const apiSettingsError = transientRef('');
         const apiSettingsSuccess = transientRef('');
         const apiTranslationProvider = ref('gemini');
+        // Library-wide "always translate X as Y" rules, applied to every
+        // translation job ahead of the per-item glossary.
+        const apiGlobalGlossary = ref('');
         const apiSectionsOpen = ref({
             paths: true,
             gamesPaths: false,
@@ -3966,12 +3976,13 @@ const app = createApp({
                                 target_language: target,
                                 provider: provider || null,
                                 model: String(autoTranslateModel.value || '') || null,
-                                max_tokens_per_chunk: Number(autoTranslateMaxTokens.value || 1000),
-                                max_lines_per_chunk: Number(autoTranslateMaxLines.value || 20),
+                                max_tokens_per_chunk: autoTranslateMaxTokens.value ? Number(autoTranslateMaxTokens.value) : null,
+                                max_lines_per_chunk: autoTranslateMaxLines.value ? Number(autoTranslateMaxLines.value) : null,
                                 max_retries_per_chunk: Number(autoTranslateMaxRetries.value || 2),
                                 retry_backoff_seconds: Number(autoTranslateRetryBackoff.value || 1.0),
                                 glossary: String(autoTranslateGlossary.value || ''),
                                 character_memory: String(autoTranslateCharacterMemory.value || ''),
+                                review_pass: !!autoTranslateReviewPass.value,
                             }),
                         });
                         if (resp.ok) {
@@ -4046,12 +4057,13 @@ const app = createApp({
                                     target_language: target,
                                     provider,
                                     model,
-                                    max_tokens_per_chunk: Number(autoTranslateMaxTokens.value || 1000),
-                                    max_lines_per_chunk: Number(autoTranslateMaxLines.value || 20),
+                                    max_tokens_per_chunk: autoTranslateMaxTokens.value ? Number(autoTranslateMaxTokens.value) : null,
+                                    max_lines_per_chunk: autoTranslateMaxLines.value ? Number(autoTranslateMaxLines.value) : null,
                                     max_retries_per_chunk: Number(autoTranslateMaxRetries.value || 2),
                                     retry_backoff_seconds: Number(autoTranslateRetryBackoff.value || 1.0),
                                     glossary: String(autoTranslateGlossary.value || ''),
                                     character_memory: String(autoTranslateCharacterMemory.value || ''),
+                                    review_pass: !!autoTranslateReviewPass.value,
                                     set_active: true,
                                     only_if_missing: true,
                                 }),
@@ -5806,6 +5818,7 @@ const app = createApp({
                 apiOpenAiCompatKeySource.value = String(data.openai_compat_api_key_source || 'env');
                 apiOpenAiCompatBaseUrlSource.value = String(data.openai_compat_base_url_source || 'env');
                 apiOpenAiCompatRequestFormat.value = String(data.openai_compat_request_format || 'openai');
+                apiGlobalGlossary.value = String(data.global_glossary || '');
                 autoTranslateProvider.value = apiTranslationProvider.value;
                 if (!autoTranslateModel.value || autoTranslateModel.value === 'gemini-2.0-flash' || autoTranslateModel.value === 'openrouter/auto') {
                     if (apiTranslationProvider.value === 'openrouter') autoTranslateModel.value = apiOpenRouterModel.value;
@@ -5855,6 +5868,8 @@ const app = createApp({
                 if (compatModel) payload.openai_compat_model = compatModel;
                 if (compatKey) payload.openai_compat_api_key = compatKey;
                 if (['openai', 'anthropic', 'ollama'].includes(compatFormat)) payload.openai_compat_request_format = compatFormat;
+                // Always send (empty string clears it server-side).
+                payload.global_glossary = String(apiGlobalGlossary.value || '');
                 if (action === 'clear_gemini') payload.clear_gemini_api_key = true;
                 if (action === 'clear_openrouter') payload.clear_openrouter_api_key = true;
                 if (action === 'clear_chutes') payload.clear_chutes_api_key = true;
@@ -5894,6 +5909,7 @@ const app = createApp({
                 apiOpenAiCompatKeySource.value = String(data.openai_compat_api_key_source || apiOpenAiCompatKeySource.value || 'env');
                 apiOpenAiCompatBaseUrlSource.value = String(data.openai_compat_base_url_source || apiOpenAiCompatBaseUrlSource.value || 'env');
                 apiOpenAiCompatRequestFormat.value = String(data.openai_compat_request_format || compatFormat || 'openai');
+                if (typeof data.global_glossary === 'string') apiGlobalGlossary.value = data.global_glossary;
                 apiGeminiKeyInput.value = '';
                 apiOpenRouterKeyInput.value = '';
                 apiChutesKeyInput.value = '';
@@ -6273,6 +6289,37 @@ const app = createApp({
                 _glossaryLoading.value = false;
             }
         }, { immediate: true });
+
+        // One LLM call mines the item's own metadata (title/desc/seiyuu, and
+        // the EN description when present) for name readings + recurring
+        // terms, then MERGES into the per-item glossary — user rules survive.
+        async function autoBuildGlossary() {
+            const itemId = _glossaryItemId.value;
+            if (!itemId || glossaryAutoBuildBusy.value) return;
+            glossaryAutoBuildBusy.value = true;
+            try {
+                const resp = await fetch(`/api/items/${itemId}/glossary/auto`, { method: 'POST' });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    pushToast({ kind: 'failure', title: 'Glossary auto-build', body: String(data.detail || 'Request failed'), ttl: 5000 });
+                    return;
+                }
+                if (Number(data.added_lines || 0) > 0) {
+                    // Hydrate without re-PUTting what the server just saved.
+                    _glossaryLoading.value = true;
+                    autoTranslateGlossary.value = String(data.glossary || '');
+                    await nextTick();
+                    _glossaryLoading.value = false;
+                    pushToast({ kind: 'success', title: 'Glossary auto-build', body: `Added ${data.added_lines} rule(s) from metadata`, ttl: 4000 });
+                } else {
+                    pushToast({ kind: 'warning', title: 'Glossary auto-build', body: 'No new rules found in metadata', ttl: 4000 });
+                }
+            } catch (err) {
+                pushToast({ kind: 'failure', title: 'Glossary auto-build', body: String((err && err.message) || err), ttl: 5000 });
+            } finally {
+                glossaryAutoBuildBusy.value = false;
+            }
+        }
 
         async function loadArchiveContents(itemId) {
             if (!itemId) {
@@ -7021,12 +7068,13 @@ const app = createApp({
                         target_language: autoTranslateTargetLanguage.value,
                         provider: autoTranslateProvider.value,
                         model: autoTranslateModel.value,
-                        max_tokens_per_chunk: Number(autoTranslateMaxTokens.value || 1000),
-                        max_lines_per_chunk: Number(autoTranslateMaxLines.value || 20),
+                        max_tokens_per_chunk: autoTranslateMaxTokens.value ? Number(autoTranslateMaxTokens.value) : null,
+                        max_lines_per_chunk: autoTranslateMaxLines.value ? Number(autoTranslateMaxLines.value) : null,
                         max_retries_per_chunk: Number(autoTranslateMaxRetries.value || 2),
                         retry_backoff_seconds: Number(autoTranslateRetryBackoff.value || 1.0),
                         glossary: String(autoTranslateGlossary.value || ''),
                         character_memory: String(autoTranslateCharacterMemory.value || ''),
+                        review_pass: !!autoTranslateReviewPass.value,
                         set_active: true,
                     }),
                 });
@@ -9641,6 +9689,7 @@ const app = createApp({
             autoTranslateMaxRetries, autoTranslateRetryBackoff,
             autoTranslateInProgress, autoTranslateProgress, autoTranslateLiveLines, autoTranslateControlBusy,
             autoTranslateGlossary, autoTranslateCharacterMemory,
+            autoTranslateReviewPass, autoBuildGlossary, glossaryAutoBuildBusy, apiGlobalGlossary,
             apiSettingsBusy, apiSettingsError, apiSettingsSuccess, apiTranslationProvider,
             apiGeminiModel, apiGeminiKeyInput, apiGeminiHasKey, apiGeminiKeySource,
             apiOpenRouterModel, apiOpenRouterKeyInput, apiOpenRouterHasKey, apiOpenRouterKeySource,

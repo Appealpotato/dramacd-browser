@@ -118,12 +118,15 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
     target_language = str(metadata.get("target_language") or "en")
     provider = str(metadata.get("provider") or await db.get_runtime_translation_provider() or "gemini")
     model = metadata.get("model") or None
-    max_tokens = int(metadata.get("max_tokens_per_chunk") or 1000)
-    max_lines = int(metadata.get("max_lines_per_chunk") or 20)
+    # None passes through to translation_job, which auto-sizes chunks for the
+    # resolved provider/format (bigger for free local backends).
+    max_tokens = int(metadata["max_tokens_per_chunk"]) if metadata.get("max_tokens_per_chunk") else None
+    max_lines = int(metadata["max_lines_per_chunk"]) if metadata.get("max_lines_per_chunk") else None
     max_retries = int(metadata.get("max_retries_per_chunk") or 2)
     retry_backoff = float(metadata.get("retry_backoff_seconds") or 1.0)
     glossary = metadata.get("glossary") or None
     character_memory = metadata.get("character_memory") or None
+    review_pass = bool(metadata.get("review_pass", False))
 
     await db.update_job(
         job_id,
@@ -412,6 +415,7 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
                 set_active=True,
                 glossary=glossary,
                 character_memory=character_memory,
+                review_pass=review_pass,
             )
             await run_translation_job(ltj)
             sub = await db.get_job(ltj) or {}

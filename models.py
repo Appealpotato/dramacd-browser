@@ -184,12 +184,15 @@ class AutopilotRequest(BaseModel):
     target_language: str = "en"
     provider: Optional[str] = None
     model: Optional[str] = None
-    max_tokens_per_chunk: int = 1000
-    max_lines_per_chunk: int = 20
+    # None = auto: sized per provider (local Ollama backends get bigger
+    # chunks since tokens are free and context is the only constraint).
+    max_tokens_per_chunk: Optional[int] = None
+    max_lines_per_chunk: Optional[int] = None
     max_retries_per_chunk: int = 2
     retry_backoff_seconds: float = 1.0
     glossary: Optional[str] = None
     character_memory: Optional[str] = None
+    review_pass: bool = False
     transcribe_language: str = "ja"
     transcribe_model: Optional[str] = None
     skip_stages: Optional[list[str]] = None  # any of: metadata_translate, extract, track_titles_translate, transcribe, track_translate
@@ -203,13 +206,18 @@ class AutoTranslateRequest(BaseModel):
     target_language: str = "en"
     provider: str = "gemini"
     model: Optional[str] = None
-    max_tokens_per_chunk: int = 1000  # Cost optimized: 100 segments = ~5 API calls
-    max_lines_per_chunk: int = 20  # 20 lines per chunk (vs 2-10 for quality)
+    # None = auto: 1000/20 for cloud providers (cost optimized), larger for
+    # local Ollama backends where tokens are free.
+    max_tokens_per_chunk: Optional[int] = None
+    max_lines_per_chunk: Optional[int] = None
     max_retries_per_chunk: int = 1  # Only retry once to save quota
     retry_backoff_seconds: float = 0.5  # Faster retries
     set_active: bool = True
     glossary: Optional[str] = None
     character_memory: Optional[str] = None
+    # Second pass: model reviews JP+EN pairs and fixes errors. Doubles job
+    # time; meant for free local backends or overnight runs.
+    review_pass: bool = False
     # When true, skip queueing if the track already has an active translation
     # run (used by bulk fan-outs so re-running doesn't waste API quota).
     only_if_missing: bool = False
@@ -232,6 +240,8 @@ class AiSettingsUpdateRequest(BaseModel):
     openai_compat_request_format: Optional[str] = None
     clear_openai_compat_api_key: bool = False
     clear_openai_compat_base_url: bool = False
+    # Library-wide glossary; empty string clears it (None = leave unchanged).
+    global_glossary: Optional[str] = None
 
 
 class WhisperSettingsUpdateRequest(BaseModel):

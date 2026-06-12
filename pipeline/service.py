@@ -52,12 +52,13 @@ async def queue_autopilot(
     target_language: str = "en",
     provider: str | None = None,
     model: str | None = None,
-    max_tokens_per_chunk: int = 1000,
-    max_lines_per_chunk: int = 20,
+    max_tokens_per_chunk: int | None = None,
+    max_lines_per_chunk: int | None = None,
     max_retries_per_chunk: int = 2,
     retry_backoff_seconds: float = 1.0,
     glossary: str | None = None,
     character_memory: str | None = None,
+    review_pass: bool = False,
     transcribe_language: str = "ja",
     transcribe_model: str | None = None,
     skip_stages: list[str] | None = None,
@@ -70,12 +71,14 @@ async def queue_autopilot(
         "target_language": target_language,
         "provider": provider,
         "model": model,
-        "max_tokens_per_chunk": int(max_tokens_per_chunk),
-        "max_lines_per_chunk": int(max_lines_per_chunk),
+        # None = auto-sized by translation_job based on the provider/format.
+        "max_tokens_per_chunk": int(max_tokens_per_chunk) if max_tokens_per_chunk else None,
+        "max_lines_per_chunk": int(max_lines_per_chunk) if max_lines_per_chunk else None,
         "max_retries_per_chunk": int(max_retries_per_chunk),
         "retry_backoff_seconds": float(retry_backoff_seconds),
         "glossary": glossary,
         "character_memory": character_memory,
+        "review_pass": bool(review_pass),
         "transcribe_language": transcribe_language,
         "transcribe_model": transcribe_model,
         "skip_stages": list(skip_stages or []),
@@ -99,13 +102,14 @@ async def queue_translation(
     target_language: str = "en",
     provider: str = "gemini",
     model: str = "gemini-2.0-flash",
-    max_tokens_per_chunk: int = 1000,  # Cost optimized: 100 segments = ~5 API calls
-    max_lines_per_chunk: int = 20,  # 20 lines per chunk (cheaper, but partial results OK now)
+    max_tokens_per_chunk: int | None = None,  # None = auto-sized per provider
+    max_lines_per_chunk: int | None = None,
     max_retries_per_chunk: int = 2,
     retry_backoff_seconds: float = 1.0,
     set_active: bool = True,
     glossary: str | None = None,
     character_memory: str | None = None,
+    review_pass: bool = False,
 ) -> int:
     metadata = {
         "item_id": int(item_id),
@@ -114,8 +118,8 @@ async def queue_translation(
         "target_language": target_language,
         "provider": provider,
         "model": model,
-        "max_tokens_per_chunk": int(max_tokens_per_chunk),
-        "max_lines_per_chunk": int(max_lines_per_chunk),
+        "max_tokens_per_chunk": int(max_tokens_per_chunk) if max_tokens_per_chunk else None,
+        "max_lines_per_chunk": int(max_lines_per_chunk) if max_lines_per_chunk else None,
         "max_retries_per_chunk": int(max_retries_per_chunk),
         "retry_backoff_seconds": float(retry_backoff_seconds),
         "set_active": bool(set_active),
@@ -126,6 +130,8 @@ async def queue_translation(
         metadata["glossary"] = str(glossary)
     if character_memory:
         metadata["character_memory"] = str(character_memory)
+    if review_pass:
+        metadata["review_pass"] = True
     job_id = await db.create_job("pipeline_translate", status="queued", metadata=metadata)
     await db.append_job_event(
         job_id,
