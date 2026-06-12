@@ -2411,13 +2411,16 @@ const app = createApp({
             detailSavingBusy.value = true;
             detailSaveError.value = '';
             const d = detailDraft.value;
+            // Cleared fields are sent as '' — NOT null. The endpoint drops
+            // null fields (exclude_none), so a null "clear" silently never
+            // saved. The DB layer stores '' as NULL.
             const body = {
                 title: d.title,
-                title_en: d.title_en || null,
-                circle: d.circle || null,
-                release_date: d.release_date || null,
-                description: d.description || null,
-                description_en: d.description_en || null,
+                title_en: (d.title_en || '').trim(),
+                circle: (d.circle || '').trim(),
+                release_date: (d.release_date || '').trim(),
+                description: d.description || '',
+                description_en: d.description_en || '',
                 seiyuu: _csvToArr(d.seiyuu),
                 seiyuu_en: _csvToArr(d.seiyuu_en),
                 tags: _csvToArr(d.tags),

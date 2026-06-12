@@ -2445,6 +2445,21 @@ async def update_item_user_data(item_id: int, data: dict):
         json_allowed = {
             "custom_tags", "seiyuu", "seiyuu_en", "tags", "tags_en",
         }
+
+        # An empty string is an EXPLICIT CLEAR for nullable text fields — the
+        # frontend can't send null for "cleared" (the endpoint's exclude_none
+        # drops null fields before they get here). Stored as NULL so a cleared
+        # translation looks exactly like a never-translated one. `title` is
+        # the card's identity: blanking it is ignored rather than cleared.
+        _clearable_text = {
+            "title_en", "circle", "release_date", "age_rating",
+            "description", "description_en", "notes",
+        }
+        for k in list(data.keys()):
+            if k in _clearable_text and isinstance(data[k], str) and not data[k].strip():
+                data[k] = None
+        if isinstance(data.get("title"), str) and not data["title"].strip():
+            data.pop("title")
         index_dirty = False
         indexed_overrides: dict[str, list] = {}
 
