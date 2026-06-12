@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from routers.api import _coerce_notes_list, _parse_json_payload
+from routers.api import _coerce_notes_list, _escape_inner_quotes, _parse_json_payload
 
 OBJ = '{"title_en": "Test", "description_en": "Desc"}'
 
@@ -33,6 +33,37 @@ class ParseJsonPayloadTests(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             _parse_json_payload("I cannot translate this content.")
         self.assertIn("I cannot translate", str(ctx.exception))
+
+    def test_unescaped_inner_quotes(self):
+        # Real failure shape (item RJ01432516): 「うーちゃん」 translated to
+        # "Uu-chan" with literal quotes inside the JSON string value.
+        raw = (
+            '{"title_en":"Test","description_en":"The one who picked up your '
+            'beloved stuffed animal "Uu-chan" was a young rider.","seiyuu_en":[]}'
+        )
+        parsed = _parse_json_payload(raw)
+        self.assertIn('"Uu-chan"', parsed["description_en"])
+
+    def test_unescaped_quotes_in_fenced_json(self):
+        raw = '```json\n{"title_en":"He said "hello" loudly"}\n```'
+        self.assertEqual(_parse_json_payload(raw)["title_en"], 'He said "hello" loudly')
+
+
+class EscapeInnerQuotesTests(unittest.TestCase):
+    def test_valid_json_untouched(self):
+        raw = '{"a": "x", "b": ["y", "z"], "c": {"d": "w"}}'
+        self.assertEqual(_escape_inner_quotes(raw), raw)
+
+    def test_already_escaped_untouched(self):
+        raw = '{"a": "say \\"hi\\" now"}'
+        self.assertEqual(_escape_inner_quotes(raw), raw)
+
+    def test_repairs_inner_quotes(self):
+        raw = '{"a": "the "thing" here"}'
+        self.assertEqual(
+            __import__("json").loads(_escape_inner_quotes(raw))["a"],
+            'the "thing" here',
+        )
 
 
 class CoerceNotesListTests(unittest.TestCase):

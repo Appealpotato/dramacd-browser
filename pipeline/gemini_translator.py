@@ -75,33 +75,13 @@ class GeminiTrackTranslator:
 
     @staticmethod
     def _extract_json_array(raw: str):
-        payload = raw.strip()
-        if payload.startswith("```"):
-            payload = payload.strip("`")
-            marker_idx = payload.find("\n")
-            if marker_idx >= 0:
-                payload = payload[marker_idx + 1 :]
-        payload = payload.strip()
-        if payload.startswith("json"):
-            payload = payload[4:].strip()
-        if payload.endswith("```"):
-            payload = payload[:-3].strip()
-
-        # Try direct parse first
+        # Shared chain: think-strip, fence-strip, strict parse, unescaped-
+        # inner-quote repair, outermost-span fallback ([...] and {...}).
+        from pipeline.json_extract import loads_robust
         try:
-            return json.loads(payload)
-        except json.JSONDecodeError as e:
-            logger.warning(f"[GeminiTrackTranslator] Direct JSON parse failed: {e}")
-            # Try extracting JSON from the string if it contains extra text
-            first_bracket = payload.find("[")
-            last_bracket = payload.rfind("]")
-            if first_bracket >= 0 and last_bracket > first_bracket:
-                try:
-                    extracted = payload[first_bracket:last_bracket + 1]
-                    logger.debug(f"[GeminiTrackTranslator] Trying extracted JSON: {extracted[:200]}")
-                    return json.loads(extracted)
-                except json.JSONDecodeError as e2:
-                    logger.warning(f"[GeminiTrackTranslator] Extracted JSON parse also failed: {e2}")
+            return loads_robust(raw)
+        except ValueError as e:
+            logger.warning(f"[GeminiTrackTranslator] JSON parse failed: {e}")
             raise
 
     async def translate_text_to_en(self, text: str) -> str:

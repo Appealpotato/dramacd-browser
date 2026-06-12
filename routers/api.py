@@ -378,44 +378,12 @@ async def _refetch_metadata(item_id: int, product_code: str):
         logger.error(f"Error in background refetch for {product_code} (item {item_id}): {e}")
 
 
-def _parse_json_payload(raw: str):
-    """Parse a model response that SHOULD be pure JSON but often isn't:
-    reasoning models prepend <think> blocks, chatty models wrap the JSON in
-    code fences or prose ("Here is the translation: {...}"). Try the strict
-    read first, then fall back to the outermost {...} / [...] span."""
-    payload = (raw or "").strip()
-    # Reasoning models (DeepSeek-R1 family etc.) emit their chain of thought
-    # in-band; everything before </think> is never part of the answer.
-    payload = re.sub(r"(?s)<think>.*?</think>", "", payload).strip()
-    if payload.startswith("```"):
-        payload = payload.strip("`")
-        marker_idx = payload.find("\n")
-        if marker_idx >= 0:
-            payload = payload[marker_idx + 1 :]
-    payload = payload.strip()
-    if payload.startswith("json"):
-        payload = payload[4:].strip()
-    if payload.endswith("```"):
-        payload = payload[:-3].strip()
-    try:
-        return json.loads(payload)
-    except Exception:
-        pass
-    # Prose around the JSON: take the outermost object/array span. Try the
-    # bracket type that OPENS FIRST before the other, so an array containing
-    # objects isn't mistaken for its first inner object.
-    spans = []
-    for opener, closer in (("{", "}"), ("[", "]")):
-        first = payload.find(opener)
-        last = payload.rfind(closer)
-        if first >= 0 and last > first:
-            spans.append((first, payload[first:last + 1]))
-    for _, candidate in sorted(spans):
-        try:
-            return json.loads(candidate)
-        except Exception:
-            continue
-    raise ValueError(f"no parseable JSON in model response: {payload[:200]!r}")
+# Shared robust extraction (think-strip, fence-strip, quote-repair, span
+# fallback) lives in pipeline.json_extract so every provider integration
+# gets the same defenses. These names are kept as aliases — tests and
+# pipeline/router.py import them from here.
+from pipeline.json_extract import escape_inner_quotes as _escape_inner_quotes  # noqa: E402
+from pipeline.json_extract import loads_robust as _parse_json_payload  # noqa: E402
 
 
 def _coerce_translation_payload(parsed):
@@ -838,69 +806,72 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         "Translate the following Japanese drama CD metadata to natural, idiomatic English.\n\n"
         "CRITICAL REQUIREMENTS:\n"
         "• Return ONLY valid JSON object with keys: title_en, description_en, seiyuu_en, cultural_notes\n"
+        "• Escape any double quotes inside string values as \\\" (e.g. quoted nicknames or speech).\n"
         "• No markdown, no code blocks, no commentary—just pure JSON.\n\n"
         f"title_ja: {title_ja}\n"
         f"description_ja: {description_ja}\n"
         f"seiyuu_ja: {json.dumps(seiyuu_ja, ensure_ascii=False)}"
     )
 
-    if request_format == "anthropic":
-        from pipeline.anthropic_compat_translator import (
-            _normalize_messages_url,
-            _supports_temperature,
-            ANTHROPIC_VERSION,
-            DEFAULT_MAX_TOKENS,
-        )
-        endpoint = _normalize_messages_url(base_url)
-        request_json = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": DEFAULT_MAX_TOKENS,
-        }
-        # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only send
-        # temperature on models that still accept it.
-        if _supports_temperature(model):
-            request_json["temperature"] = 0.2
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                endpoint,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": api_key,
-                    "anthropic-version": ANTHROPIC_VERSION,
-                },
-                json=request_json,
+    async def _ask(prompt_text: str) -> str:
+        if request_format == "anthropic":
+            from pipeline.anthropic_compat_translator import (
+                _normalize_messages_url,
+                _supports_temperature,
+                ANTHROPIC_VERSION,
+                DEFAULT_MAX_TOKENS,
             )
-        if resp.status_code >= 400:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Anthropic-compatible upstream error ({resp.status_code}): {resp.text[:300]}",
-            )
-        data = resp.json()
-        content_field = data.get("content")
-        content = ""
-        if isinstance(content_field, list):
-            parts = []
-            for entry in content_field:
-                if isinstance(entry, str):
-                    txt = entry.strip()
-                elif isinstance(entry, dict):
-                    txt = str(entry.get("text") or entry.get("content") or "").strip()
-                else:
-                    txt = ""
-                if txt:
-                    parts.append(txt)
-            content = "\n".join(parts).strip()
-        elif isinstance(content_field, str):
-            content = content_field.strip()
-        if not content:
-            raise HTTPException(status_code=502, detail=f"Anthropic-compatible returned empty content: {str(data)[:200]}")
-        if data.get("stop_reason") == "max_tokens":
-            raise HTTPException(
-                status_code=502,
-                detail="Anthropic-compatible output hit the max_tokens cap mid-JSON — the description may be too long for one translation call",
-            )
-    else:
+            endpoint = _normalize_messages_url(base_url)
+            request_json = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt_text}],
+                "max_tokens": DEFAULT_MAX_TOKENS,
+            }
+            # Fable 5 / Opus 4.8 / 4.7 reject sampling params with a 400; only send
+            # temperature on models that still accept it.
+            if _supports_temperature(model):
+                request_json["temperature"] = 0.2
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    endpoint,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": api_key,
+                        "anthropic-version": ANTHROPIC_VERSION,
+                    },
+                    json=request_json,
+                )
+            if resp.status_code >= 400:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Anthropic-compatible upstream error ({resp.status_code}): {resp.text[:300]}",
+                )
+            data = resp.json()
+            content_field = data.get("content")
+            content = ""
+            if isinstance(content_field, list):
+                parts = []
+                for entry in content_field:
+                    if isinstance(entry, str):
+                        txt = entry.strip()
+                    elif isinstance(entry, dict):
+                        txt = str(entry.get("text") or entry.get("content") or "").strip()
+                    else:
+                        txt = ""
+                    if txt:
+                        parts.append(txt)
+                content = "\n".join(parts).strip()
+            elif isinstance(content_field, str):
+                content = content_field.strip()
+            if not content:
+                raise HTTPException(status_code=502, detail=f"Anthropic-compatible returned empty content: {str(data)[:200]}")
+            if data.get("stop_reason") == "max_tokens":
+                raise HTTPException(
+                    status_code=502,
+                    detail="Anthropic-compatible output hit the max_tokens cap mid-JSON — the description may be too long for one translation call",
+                )
+            return content
+
         from pipeline.openrouter_translator import _normalize_chat_completions_url
         endpoint = _normalize_chat_completions_url(base_url)
 
@@ -908,7 +879,7 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         for use_response_format in (True, False):
             request_json = {
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": prompt_text}],
                 "temperature": 0.2,
             }
             if use_response_format:
@@ -959,11 +930,30 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         content = content.strip()
         if not content:
             raise HTTPException(status_code=502, detail="OpenAI-compatible returned empty content")
+        return content
 
+    content = await _ask(prompt)
     try:
         parsed_raw = _parse_json_payload(content)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"OpenAI-compatible returned invalid JSON — {exc}")
+    except Exception as first_exc:
+        # One corrective round-trip: models reliably repair their own JSON
+        # when shown the parser error (unescaped quotes, stray prose, etc.).
+        repair_prompt = (
+            "The following response was REJECTED by a strict JSON parser.\n"
+            f"Parser error: {first_exc}\n\n"
+            f"<rejected_response>\n{content[:8000]}\n</rejected_response>\n\n"
+            "Output the SAME data corrected into ONE valid JSON object with keys: "
+            "title_en, description_en, seiyuu_en, cultural_notes.\n"
+            "Escape all double quotes inside string values as \\\". "
+            "No markdown, no code blocks, no commentary—just pure JSON."
+        )
+        try:
+            content = await _ask(repair_prompt)
+            parsed_raw = _parse_json_payload(content)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"OpenAI-compatible returned invalid JSON — {exc}")
     parsed = _coerce_translation_payload(parsed_raw)
     title_en = str(parsed.get("title_en") or "").strip()
     description_en = str(parsed.get("description_en") or "").strip()

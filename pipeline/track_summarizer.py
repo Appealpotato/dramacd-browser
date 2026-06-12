@@ -310,33 +310,13 @@ class TrackSummarizer:
 
     @staticmethod
     def _extract_and_validate_json(raw: str) -> dict:
-        """Extract and validate JSON from model response."""
-        payload = raw.strip()
-
-        # Strip markdown code blocks if present
-        if payload.startswith("```"):
-            payload = payload.strip("`")
-            marker_idx = payload.find("\n")
-            if marker_idx >= 0:
-                payload = payload[marker_idx + 1:]
-        payload = payload.strip()
-        if payload.startswith("json"):
-            payload = payload[4:].strip()
-        if payload.endswith("```"):
-            payload = payload[:-3].strip()
-
-        # Parse JSON
+        """Extract and validate JSON from model response. Parsing uses the
+        shared chain (think-strip, fence-strip, quote-repair, span fallback)."""
+        from pipeline.json_extract import loads_robust
         try:
-            parsed = json.loads(payload)
-        except json.JSONDecodeError as e:
-            # Try extracting JSON from text
-            first_brace = payload.find("{")
-            last_brace = payload.rfind("}")
-            if first_brace >= 0 and last_brace > first_brace:
-                payload = payload[first_brace:last_brace + 1]
-                parsed = json.loads(payload)
-            else:
-                raise RuntimeError(f"Failed to parse JSON: {e}")
+            parsed = loads_robust(raw)
+        except ValueError as e:
+            raise RuntimeError(f"Failed to parse JSON: {e}")
 
         # Validate required fields
         if not isinstance(parsed, dict):

@@ -86,18 +86,11 @@ class ChutesTrackTranslator:
 
     @staticmethod
     def _extract_json(raw: str):
-        payload = raw.strip()
-        if payload.startswith("```"):
-            payload = payload.strip("`")
-            marker_idx = payload.find("\n")
-            if marker_idx >= 0:
-                payload = payload[marker_idx + 1 :]
-        payload = payload.strip()
-        if payload.startswith("json"):
-            payload = payload[4:].strip()
-        if payload.endswith("```"):
-            payload = payload[:-3].strip()
-        return json.loads(payload)
+        # Shared chain: think-strip, fence-strip, strict parse, unescaped-
+        # inner-quote repair, outermost-span fallback. Chutes models are
+        # often DeepSeek-R1 family, so the think-strip matters here.
+        from pipeline.json_extract import loads_robust
+        return loads_robust(raw)
 
     @staticmethod
     def _coerce_rows_payload(parsed):
