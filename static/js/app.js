@@ -3455,6 +3455,7 @@ const app = createApp({
             pipeline_transcribe: 'Transcribing',
             pipeline_translate: 'Translating',
             pipeline_metadata_translate: 'Translating metadata',
+            pipeline_track_titles_translate: 'Translating track titles',
         };
 
         function pipelineJobLabel(job) {

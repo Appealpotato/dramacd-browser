@@ -638,7 +638,53 @@ async def fix_mojibake_paths(dry_run: bool = True, _auth=Depends(require_api_key
 
 
 @router.post("/items/{item_id}/translate-track-names")
-async def translate_track_names(item_id: int, _auth=Depends(require_api_key)):
+async def translate_track_names_endpoint(item_id: int, _auth=Depends(require_api_key)):
+    """Synchronous track-title translation, wrapped in a job row so it shows
+    up in the Activity drawer. Autopilot calls translate_track_names directly
+    — its own job row already covers the stage."""
+    item = await db.get_item(item_id)
+    label = (item or {}).get("product_code") or f"#{item_id}"
+    job_id = await db.create_job(
+        "pipeline_track_titles_translate",
+        status="running",
+        metadata={"item_id": item_id, "queued_at": datetime.now().isoformat()},
+    )
+    await db.update_job(job_id, started_at=datetime.now().isoformat(), total=1, completed=0)
+    try:
+        result = await translate_track_names(item_id)
+    except HTTPException as exc:
+        await db.update_job(
+            job_id, status="failed", stopped=1, completed=1, failed=1,
+            error=str(exc.detail)[:300], finished_at=datetime.now().isoformat(),
+        )
+        await db.append_job_event(job_id, "warn", f"{label} — failed", {"error": str(exc.detail)[:300]})
+        raise
+    except Exception as exc:
+        await db.update_job(
+            job_id, status="failed", stopped=1, completed=1, failed=1,
+            error=str(exc)[:300], finished_at=datetime.now().isoformat(),
+        )
+        await db.append_job_event(job_id, "warn", f"{label} — failed", {"error": str(exc)[:300]})
+        raise
+    await db.update_job(
+        job_id, status="completed", stopped=1, completed=1,
+        finished_at=datetime.now().isoformat(),
+        result_json={
+            "translated_count": result.get("translated_count"),
+            "total": result.get("total"),
+        },
+    )
+    await db.append_job_event(
+        job_id, "info",
+        f"{label} — translated {result.get('translated_count')} of {result.get('total')} track title(s)",
+        {"item_id": item_id},
+    )
+    if isinstance(result, dict):
+        result["job_id"] = job_id
+    return result
+
+
+async def translate_track_names(item_id: int):
     """Translate every track's JA title to English in one batch using the active provider."""
     await _ensure_pipeline_enabled()
     item = await db.get_item(item_id)

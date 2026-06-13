@@ -2229,7 +2229,54 @@ async def set_item_manual_track_count_endpoint(item_id: int, payload: dict, _aut
 
 
 @router.post("/items/{item_id}/translate-metadata")
-async def translate_item_metadata(item_id: int, _auth=Depends(require_api_key)):
+async def translate_item_metadata_endpoint(item_id: int, _auth=Depends(require_api_key)):
+    """Synchronous single-item metadata translation, wrapped in a job row so
+    it shows up in the Activity drawer. Autopilot and the bulk job call
+    translate_item_metadata directly — they already have their own job rows."""
+    item = await db.get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    label = item.get("product_code") or f"#{item_id}"
+    job_id = await db.create_job(
+        "pipeline_metadata_translate",
+        status="running",
+        metadata={"item_id": item_id, "item_ids": [item_id], "queued_at": datetime.now().isoformat()},
+    )
+    await db.update_job(job_id, started_at=datetime.now().isoformat(), total=1, completed=0)
+    try:
+        result = await translate_item_metadata(item_id)
+    except HTTPException as exc:
+        await db.update_job(
+            job_id, status="failed", stopped=1, completed=1, failed=1,
+            error=str(exc.detail)[:300], finished_at=datetime.now().isoformat(),
+        )
+        await db.append_job_event(job_id, "warn", f"{label} — failed", {"error": str(exc.detail)[:300]})
+        raise
+    except Exception as exc:
+        await db.update_job(
+            job_id, status="failed", stopped=1, completed=1, failed=1,
+            error=str(exc)[:300], finished_at=datetime.now().isoformat(),
+        )
+        await db.append_job_event(job_id, "warn", f"{label} — failed", {"error": str(exc)[:300]})
+        raise
+    await db.update_job(
+        job_id, status="completed", stopped=1, completed=1,
+        finished_at=datetime.now().isoformat(),
+        result_json={"ok": 1, "failed": 0, "total": 1},
+    )
+    await db.append_job_event(
+        job_id, "info", f"{label} — translated",
+        {
+            "item_id": item_id,
+            "provider_used": result.get("provider_used"),
+            "title_en": str(result.get("title_en") or "")[:80],
+        },
+    )
+    result["job_id"] = job_id
+    return result
+
+
+async def translate_item_metadata(item_id: int):
     item = await db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
