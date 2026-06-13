@@ -3990,7 +3990,7 @@
                                     :key="ev.id || (ev.created_at + '|' + ev.message)"
                                     :class="'event-' + (ev.level || 'info')">
                                     <span class="event-time" v-if="ev.created_at">{{ formatActivityTime(ev.created_at) }}</span>
-                                    <span class="event-msg">{{ ev.message }}</span>
+                                    <span class="event-msg">{{ humanizeJobEvent(ev) }}</span>
                                 </li>
                             </ul>
                             <div v-else class="activity-empty-hint">No events yet.</div>
@@ -4334,7 +4334,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=165"></script>
+    <script src="/static/js/app.js?v=166"></script>
 </body>
 </html>
 

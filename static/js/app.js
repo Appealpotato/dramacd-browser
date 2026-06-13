@@ -3461,6 +3461,72 @@ const app = createApp({
             return PIPELINE_JOB_LABELS[job?.job_type] || (job?.job_type || 'Job');
         }
 
+        // Rewrite backend job-event messages into plain language for the
+        // Activity drawer. Backend strings stay technical/greppable; this is
+        // display-only, so old jobs in the DB get readable wording too.
+        // Order matters — first match wins.
+        const EVENT_REWRITES = [
+            // Translation jobs
+            [/^Auto-translation started$/, 'Translation started'],
+            [/^Auto-translation completed$/, 'Translation finished'],
+            [/^Translated chunk (\d+)\/(\d+)$/, 'Translated part $1 of $2'],
+            [/^Chunk (\d+) failed — continuing with remaining chunks$/, 'Part $1 failed — continuing with the rest'],
+            [/^Waiting for a (?:translation )?slot \(running (\d+) at a time\)$/, 'Waiting in queue (up to $1 run at once)'],
+            [/^Partial translation saved with (\d+) segments \((.+)\)$/, 'Saved what finished so far ($1 lines) — $2'],
+            [/^Translation stopped by user$/, 'Stopped'],
+            [/^Starting review pass$/, 'Starting second-pass review'],
+            [/^Review chunk (\d+)\/(\d+): revised (\d+) segment\(s\)$/, 'Review: improved $3 line(s) in part $1 of $2'],
+            [/^Review pass finished: (\d+) segment\(s\) revised$/, 'Review finished — $1 line(s) improved'],
+            [/^Review pass stopped by user — saving translation with partial review$/, 'Stopped during review — saved with the review done so far'],
+            [/^Shared translation with (\d+) sibling track\(s\)$/, 'Also applied to $1 duplicate track(s)'],
+            [/^Glossary feedback: \+(\d+) rule\(s\) saved to item glossary$/, 'Learned $1 new term(s) and saved them to this CD’s glossary'],
+            [/^Glossary feedback skipped$/, 'Couldn’t update the glossary from this track — skipped'],
+            [/^Translated item description for context$/, 'Translated the CD description for context'],
+            [/^Failed to translate item description; continuing without it$/, 'Couldn’t translate the CD description — continuing without it'],
+            [/^Injected linked-game description into tokuten translation context$/, 'Added the linked game’s description for context'],
+            // Transcription jobs
+            [/^Whisper model loaded$/, 'Speech recognition ready'],
+            [/^Whisper initialization failed$/, 'Couldn’t load the speech recognition model'],
+            [/^Transcription stopped by user$/, 'Stopped'],
+            [/^Skipped \(active transcript from sibling\): (.+)$/, '$1 — already transcribed (duplicate copy)'],
+            [/^Track file not found: (.+)$/, 'Audio file missing: $1'],
+            [/^Shared transcript with (\d+) sibling track\(s\)$/, 'Also applied to $1 duplicate track(s)'],
+            [/^Generated context summary for (.+)$/, 'Summarized "$1" for later tracks'],
+            // Extraction jobs
+            [/^Extraction started$/, 'Unpacking files'],
+            [/^Extraction finished$/, 'Files unpacked'],
+            [/^Reusing existing extracted audio \(no --force\)$/, 'Audio already unpacked — reusing it'],
+            [/^Source archive is newer than the extraction - re-extracting$/, 'Archive changed — unpacking again'],
+            [/^Ignoring (\d+) loose audio file\(s\) — item has real archive\(s\)$/, 'Skipped $1 loose audio file(s) — the archives take priority'],
+            [/^Imported bundled package \((\d+) transcript run\(s\)\)$/, 'Imported $1 bundled transcript(s)'],
+            [/^Bundled-package import skipped \(error\)$/, 'Couldn’t import the bundled package — skipped'],
+            [/^Bundled-subtitle import skipped \(error\)$/, 'Couldn’t import bundled subtitles — skipped'],
+            // Autopilot
+            [/^Starting workflow$/, 'Workflow started'],
+            [/^Workflow aborted — (.+)$/, 'Stopped — $1'],
+            [/^Couldn't translate one track$/, 'One track didn’t translate — continuing'],
+            // Queue notices
+            [/^On-demand (extraction|transcription|translation) queued$/, (m) => m[1][0].toUpperCase() + m[1].slice(1) + ' queued'],
+        ];
+
+        function humanizeJobEvent(ev) {
+            const msg = String(ev?.message || '');
+            const data = ev?.data || ev?.data_json || {};
+            // Model-loaded events carry the useful bits in data; surface them.
+            if (msg === 'Whisper model loaded') {
+                const device = data.device === 'cuda' ? 'GPU' : (data.device === 'cpu' ? 'CPU' : '');
+                const parts = [data.model, device].filter(Boolean).join(', ');
+                return parts ? `Speech recognition ready (${parts})` : 'Speech recognition ready';
+            }
+            for (const [pattern, replacement] of EVENT_REWRITES) {
+                const m = msg.match(pattern);
+                if (!m) continue;
+                if (typeof replacement === 'function') return replacement(m);
+                return msg.replace(pattern, replacement);
+            }
+            return msg;
+        }
+
         // For each autopilot job we may surface the *latest* sub-job that
         // overlaps in time (extraction / transcription / translation that the
         // autopilot itself spawned for the same item). Those sub-jobs render
@@ -9836,6 +9902,7 @@ const app = createApp({
             bulkDeleteGamesSelected,
             bulkConfirmSelected, bulkUnconfirmSelected, bulkOverrideSelected, toggleBulkActions, bulkTranslateSelected, bulkAddCustomTagSelected, bulkAutoTranslateSelected, bulkRunAutopilotSelected, bulkExtractSelected, bulkTranscribeSelected, showBulkActions,
             autopilotJobs, visibleAutopilotJobs, autopilotActiveCount, finishedActivityCount, activityDrawerOpen, expandedActivityJob, activityEvents, activityEventsLoading, autopilotToasts,
+            humanizeJobEvent,
             toggleActivityDrawer, toggleActivityRowExpand, stopAutopilotJob, dismissAutopilotToast,
             dismissActivityJob, dismissAllFinishedActivity, restartAutopilotJob,
             activityItemTitle, activityStatusLabel, activityStageDisplay, activityStagePercent, activityElapsed, formatActivityTime,
