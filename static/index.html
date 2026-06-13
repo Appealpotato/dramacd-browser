@@ -3944,6 +3944,9 @@
                                 <span class="activity-row-item">{{ activityItemTitle(job) }}</span>
                                 <span class="activity-row-status">{{ activityStatusLabel(job) }}</span>
                             </div>
+                            <div class="activity-row-track" v-if="activityJobTrackLabel(job)">
+                                {{ activityJobTrackLabel(job) }}
+                            </div>
                             <div class="activity-row-stage">
                                 <span>{{ activityStageDisplay(job) }}</span>
                                 <span class="activity-row-elapsed" v-if="activityElapsed(job)">{{ activityElapsed(job) }}</span>
@@ -4334,7 +4337,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=167"></script>
+    <script src="/static/js/app.js?v=168"></script>
 </body>
 </html>
 

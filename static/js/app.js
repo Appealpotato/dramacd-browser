@@ -3689,6 +3689,25 @@ const app = createApp({
             return `Item #${itemId}`;
         }
 
+        // The specific track a per-track job is working on, shown under the
+        // CD title in the drawer. Translate jobs carry track_id in metadata;
+        // a transcription job targeting exactly one track gets the same
+        // treatment (multi-track transcriptions already name the current
+        // track in their status line).
+        function activityJobTrackLabel(job) {
+            const itemId = job?.metadata_json?.item_id;
+            if (itemId == null) return null;
+            let trackId = null;
+            if (job?.job_type === 'pipeline_translate') {
+                trackId = job?.metadata_json?.track_id;
+            } else if (job?.job_type === 'pipeline_transcribe') {
+                const ids = job?.metadata_json?.track_ids;
+                if (Array.isArray(ids) && ids.length === 1) trackId = ids[0];
+            }
+            if (trackId == null) return null;
+            return trackDisplayLabel(itemId, trackId);
+        }
+
         function dismissActivityJob(jobId) {
             const next = new Set(dismissedActivityJobs.value);
             next.add(jobId);
@@ -9903,7 +9922,7 @@ const app = createApp({
             bulkDeleteGamesSelected,
             bulkConfirmSelected, bulkUnconfirmSelected, bulkOverrideSelected, toggleBulkActions, bulkTranslateSelected, bulkAddCustomTagSelected, bulkAutoTranslateSelected, bulkRunAutopilotSelected, bulkExtractSelected, bulkTranscribeSelected, showBulkActions,
             autopilotJobs, visibleAutopilotJobs, autopilotActiveCount, finishedActivityCount, activityDrawerOpen, expandedActivityJob, activityEvents, activityEventsLoading, autopilotToasts,
-            humanizeJobEvent,
+            humanizeJobEvent, activityJobTrackLabel,
             toggleActivityDrawer, toggleActivityRowExpand, stopAutopilotJob, dismissAutopilotToast,
             dismissActivityJob, dismissAllFinishedActivity, restartAutopilotJob,
             activityItemTitle, activityStatusLabel, activityStageDisplay, activityStagePercent, activityElapsed, formatActivityTime,

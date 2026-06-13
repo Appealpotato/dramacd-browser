@@ -5590,6 +5590,16 @@ input[type="radio"]:disabled {
     letter-spacing: 0.05em;
     flex-shrink: 0;
 }
+/* Specific track a per-track job (translate / single-track transcribe) is
+   working on — sits between the CD title and the stage line. */
+.activity-row-track {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 1px;
+}
 .activity-row.status-running .activity-row-status { color: var(--accent); }
 .activity-row.status-completed .activity-row-status { color: var(--text-muted); }
 .activity-row.status-failed .activity-row-status { color: #ff5470; }
