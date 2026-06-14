@@ -6,12 +6,16 @@ from datetime import datetime
 import database as db
 
 # Cap concurrent per-track translation jobs across the whole process. Bulk
-# fan-outs (e.g. selecting 19 tracks and queueing auto-translate for each)
-# would otherwise spawn N concurrent provider calls — blow the rate limit
-# and flood the activity drawer. Translations are API-bound, not GPU-bound,
-# so 10 is a comfortable ceiling.
-MAX_CONCURRENT_TRANSLATIONS = 10
-_translation_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TRANSLATIONS)
+# fan-outs (e.g. selecting 19 tracks and queueing auto-translate for each) and
+# autopilot would otherwise fire N concurrent provider calls at once. For a
+# local LLM server (Ollama/LM Studio) that serves one request at a time, those
+# "parallel" jobs just queue *inside* the server and each blocks for minutes —
+# so the app shows everything "running · 0/N" with no progress, looking stuck.
+# The limit is a runtime setting (Settings → Concurrency); the DynamicSemaphore
+# reads it fresh per job, so changes apply without a restart.
+from pipeline.concurrency import DynamicSemaphore
+
+_translation_semaphore = DynamicSemaphore(db.get_runtime_max_llm_jobs, name="LLM", default=3)
 from pipeline.chutes_translator import ChutesTrackTranslator
 from pipeline.gemini_translator import GeminiTrackTranslator, build_token_chunks
 from pipeline.openrouter_translator import OpenRouterTrackTranslator
@@ -328,12 +332,17 @@ async def run_translation_job(job_id: int):
     job = await db.get_job(job_id)
     if not job or job.get("job_type") != "pipeline_translate":
         return
-    if _translation_semaphore.locked():
+    if await _translation_semaphore.would_wait():
+        limit = await db.get_runtime_max_llm_jobs()
+        # Keep the job 'queued' (it already is) and give it a human reason so
+        # the activity drawer shows "Queued · waiting for a free LLM slot"
+        # instead of a silent, stuck-looking row.
+        await db.update_job(job_id, current=f"Waiting for a free LLM slot (max {limit} at once)")
         await db.append_job_event(
             job_id,
             "info",
-            f"Waiting for a translation slot (running {MAX_CONCURRENT_TRANSLATIONS} at a time)",
-            {},
+            f"Queued — waiting for a free LLM slot (max {limit} running at once)",
+            {"max_llm_jobs": limit},
         )
     async with _translation_semaphore:
         # Re-fetch in case the job was stopped while we waited.

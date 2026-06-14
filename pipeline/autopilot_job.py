@@ -508,8 +508,8 @@ async def _execute_autopilot(job_id: int, item_id: int, metadata: dict):
 
     # ---- Main loop: kick off track translations as soon as each track's
     # transcript is ready, in track-index order. Translations run as
-    # asyncio tasks so they overlap (capped globally at MAX_CONCURRENT_TRANSLATIONS
-    # in run_translation_job). The summary-context chain is preserved
+    # asyncio tasks so they overlap (capped globally by the max-LLM-jobs
+    # setting in run_translation_job). The summary-context chain is preserved
     # because whisper_job writes each track's summary to the DB before the
     # next track finishes transcribing — so by the time translation starts,
     # all prior summaries are already on disk. ----

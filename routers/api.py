@@ -1,13 +1,17 @@
 import re
 import base64
 import binascii
+import asyncio
+import ipaddress
 import json
 import httpx
+import socket
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
 from typing import Optional, List
+from urllib.parse import urljoin, urlparse
 from models import (
     ItemUpdate,
     OverrideCodeRequest,
@@ -19,6 +23,7 @@ from models import (
     SeiyuuMergeRequest,
     SeiyuuPinRequest,
     WhisperSettingsUpdateRequest,
+    ConcurrencySettingsUpdateRequest,
 )
 from scraper import fetch_metadata_for_code
 from config import COVERS_DIR
@@ -36,7 +41,56 @@ _picked_dirs: set[str] = set()
 DLSITE_URL_PATTERN = re.compile(r'(RJ|BJ|VJ)\d{6,8}', re.IGNORECASE)
 ALLOWED_COVER_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_COVER_BYTES = 8 * 1024 * 1024  # 8MB
+MAX_COVER_REDIRECTS = 5
 EN_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _is_public_ip(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
+
+async def _validate_public_https_url(raw_url: str) -> str:
+    parsed = urlparse((raw_url or "").strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("cover_url must be an https URL")
+    if parsed.username or parsed.password:
+        raise ValueError("cover_url credentials are not allowed")
+
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"cover_url host could not be resolved: {exc}") from exc
+    addresses = {info[4][0] for info in infos if info and info[4]}
+    if not addresses or not all(_is_public_ip(address) for address in addresses):
+        raise ValueError("cover_url host must resolve to public IP addresses")
+    return parsed.geturl()
+
+
+async def _fetch_public_cover(cover_url: str) -> tuple[bytes, str]:
+    current_url = await _validate_public_https_url(cover_url)
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+        for _ in range(MAX_COVER_REDIRECTS + 1):
+            resp = await client.get(current_url)
+            if 300 <= resp.status_code < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    raise ValueError("cover_url redirect had no Location header")
+                current_url = await _validate_public_https_url(urljoin(current_url, location))
+                continue
+            resp.raise_for_status()
+            return resp.content, current_url
+    raise ValueError("cover_url redirected too many times")
 
 
 @router.get("/items")
@@ -1556,6 +1610,44 @@ async def update_whisper_settings(
     }
 
 
+@router.get("/settings/concurrency")
+async def get_concurrency_settings():
+    return {
+        "max_whisper_jobs": await db.get_runtime_max_whisper_jobs(),
+        "max_llm_jobs": await db.get_runtime_max_llm_jobs(),
+        "max_whisper_jobs_range": [db.MAX_WHISPER_JOBS_MIN, db.MAX_WHISPER_JOBS_MAX],
+        "max_llm_jobs_range": [db.MAX_LLM_JOBS_MIN, db.MAX_LLM_JOBS_MAX],
+    }
+
+
+@router.put("/settings/concurrency")
+async def update_concurrency_settings(
+    request: ConcurrencySettingsUpdateRequest,
+    _auth=Depends(require_api_key),
+):
+    updated: list[str] = []
+    if request.max_whisper_jobs is not None:
+        try:
+            await db.set_runtime_max_whisper_jobs(request.max_whisper_jobs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        updated.append("max_whisper_jobs")
+    if request.max_llm_jobs is not None:
+        try:
+            await db.set_runtime_max_llm_jobs(request.max_llm_jobs)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        updated.append("max_llm_jobs")
+    if not updated:
+        raise HTTPException(status_code=400, detail="No settings provided")
+    return {
+        "status": "updated",
+        "updated_fields": updated,
+        "max_whisper_jobs": await db.get_runtime_max_whisper_jobs(),
+        "max_llm_jobs": await db.get_runtime_max_llm_jobs(),
+    }
+
+
 def _format_english_description(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -1637,13 +1729,10 @@ async def _download_item_cover_from_url(item_id: int, product_code: str, cover_u
     if not cover_url:
         return None
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(cover_url, follow_redirects=True)
-            resp.raise_for_status()
-            content = resp.content
+        content, final_url = await _fetch_public_cover(cover_url)
         if not content or len(content) > MAX_COVER_BYTES:
             return None
-        match = re.search(r"\.(jpg|jpeg|png|webp)(?:$|\?)", cover_url, re.IGNORECASE)
+        match = re.search(r"\.(jpg|jpeg|png|webp)(?:$|\?)", final_url, re.IGNORECASE)
         suffix = f".{match.group(1).lower()}" if match else ".jpg"
         if suffix not in ALLOWED_COVER_EXTENSIONS:
             suffix = ".jpg"
@@ -1653,7 +1742,7 @@ async def _download_item_cover_from_url(item_id: int, product_code: str, cover_u
         target = COVERS_DIR / filename
         target.write_bytes(content)
         cover_local = str(target.relative_to(COVERS_DIR.parent.parent))
-        await db.set_item_cover(item_id, cover_local=cover_local, cover_url=cover_url)
+        await db.set_item_cover(item_id, cover_local=cover_local, cover_url=final_url)
         return cover_local
     except Exception as exc:
         logger.warning("Failed to download cover for item %s from %s: %s", item_id, cover_url, exc)
@@ -2815,7 +2904,4 @@ async def backfill_active_transcripts(_auth=Depends(require_api_key)):
     this the Player tab loads the sibling and sees "No transcript loaded"
     even though the transcript exists."""
     return await db.backfill_missing_active_transcripts()
-
-
-
 

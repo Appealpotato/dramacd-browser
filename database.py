@@ -21,6 +21,8 @@ from config import (
     OPENAI_COMPAT_BASE_URL,
     OPENAI_COMPAT_MODEL,
     WHISPER_MODEL,
+    MAX_WHISPER_JOBS,
+    MAX_LLM_JOBS,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,8 @@ RUNTIME_WHISPER_BEAM_SIZE_SETTING = "runtime_whisper_beam_size"
 RUNTIME_WHISPER_CONDITION_ON_PREVIOUS_SETTING = "runtime_whisper_condition_on_previous"
 RUNTIME_WHISPER_WORD_TIMESTAMPS_SETTING = "runtime_whisper_word_timestamps"
 RUNTIME_WHISPER_PREFERRED_VARIANT_SETTING = "runtime_whisper_preferred_variant"
+RUNTIME_MAX_WHISPER_JOBS_SETTING = "runtime_max_whisper_jobs"
+RUNTIME_MAX_LLM_JOBS_SETTING = "runtime_max_llm_jobs"
 
 SUPPORTED_WHISPER_MODELS = (
     "tiny",
@@ -2146,6 +2150,59 @@ async def set_runtime_translation_provider(provider: str) -> str:
         )
     await set_app_setting(RUNTIME_TRANSLATION_PROVIDER_SETTING, clean)
     return clean
+
+
+# ---- Pipeline concurrency caps ---------------------------------------------
+# How many transcription / translation jobs may run at once. Both back a
+# DynamicSemaphore in the job runners, so changes take effect for the next job
+# to start without a restart. Defaults come from config (env-overridable).
+
+MAX_WHISPER_JOBS_MIN, MAX_WHISPER_JOBS_MAX = 1, 8
+MAX_LLM_JOBS_MIN, MAX_LLM_JOBS_MAX = 1, 16
+
+
+async def get_runtime_max_whisper_jobs() -> int:
+    value = await get_app_setting(RUNTIME_MAX_WHISPER_JOBS_SETTING)
+    try:
+        n = int(str(value).strip()) if value is not None else MAX_WHISPER_JOBS
+    except (TypeError, ValueError):
+        n = MAX_WHISPER_JOBS
+    return max(MAX_WHISPER_JOBS_MIN, min(MAX_WHISPER_JOBS_MAX, n))
+
+
+async def set_runtime_max_whisper_jobs(n: int) -> int:
+    try:
+        v = int(n)
+    except (TypeError, ValueError):
+        raise ValueError("Max transcription jobs must be an integer")
+    if v < MAX_WHISPER_JOBS_MIN or v > MAX_WHISPER_JOBS_MAX:
+        raise ValueError(
+            f"Max transcription jobs must be between {MAX_WHISPER_JOBS_MIN} and {MAX_WHISPER_JOBS_MAX}"
+        )
+    await set_app_setting(RUNTIME_MAX_WHISPER_JOBS_SETTING, str(v))
+    return v
+
+
+async def get_runtime_max_llm_jobs() -> int:
+    value = await get_app_setting(RUNTIME_MAX_LLM_JOBS_SETTING)
+    try:
+        n = int(str(value).strip()) if value is not None else MAX_LLM_JOBS
+    except (TypeError, ValueError):
+        n = MAX_LLM_JOBS
+    return max(MAX_LLM_JOBS_MIN, min(MAX_LLM_JOBS_MAX, n))
+
+
+async def set_runtime_max_llm_jobs(n: int) -> int:
+    try:
+        v = int(n)
+    except (TypeError, ValueError):
+        raise ValueError("Max translation jobs must be an integer")
+    if v < MAX_LLM_JOBS_MIN or v > MAX_LLM_JOBS_MAX:
+        raise ValueError(
+            f"Max translation jobs must be between {MAX_LLM_JOBS_MIN} and {MAX_LLM_JOBS_MAX}"
+        )
+    await set_app_setting(RUNTIME_MAX_LLM_JOBS_SETTING, str(v))
+    return v
 
 
 def _ignored_path_key(path: str) -> str:

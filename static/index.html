@@ -2565,6 +2565,53 @@
                                 <div v-if="whisperSettingsSuccess" class="maintenance-ok" style="margin-top: 8px;">{{ whisperSettingsSuccess }}</div>
                             </div>
                         </div>
+
+                        <!-- Concurrency Card -->
+                        <div class="card-section">
+                            <div class="card-header" @click="toggleApiSection('concurrency')">
+                                <div class="card-title">
+                                    <svg class="card-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                                    <span>Concurrency (job limits)</span>
+                                </div>
+                                <div class="card-toggle" :class="{ collapsed: !apiSectionsOpen.concurrency }">▼</div>
+                            </div>
+                            <div class="card-content" :class="{ collapsed: !apiSectionsOpen.concurrency }">
+                                <span class="pipeline-note" style="display:block; margin-bottom: 10px;">
+                                    How many jobs may run at once. Extra jobs wait in a visible <strong>Queued</strong> state
+                                    instead of all firing together. Lower these if your GPU gets hammered; the limit applies
+                                    to the next job that starts (running jobs keep their slot).
+                                </span>
+                                <div class="pipeline-controls">
+                                    <label>Max simultaneous transcription (Whisper) jobs: <strong>{{ concurrencySettings.max_whisper_jobs }}</strong></label>
+                                    <input type="range" :min="concurrencyRanges.whisper[0]" :max="concurrencyRanges.whisper[1]" step="1" v-model.number="concurrencySettings.max_whisper_jobs">
+                                    <span class="pipeline-note">
+                                        Whisper is GPU-bound — one decode at a time per GPU. <strong>1</strong> is recommended;
+                                        higher just thrashes VRAM with no real speedup.
+                                    </span>
+                                </div>
+                                <div class="pipeline-controls">
+                                    <label>Max simultaneous translation (LLM) jobs: <strong>{{ concurrencySettings.max_llm_jobs }}</strong></label>
+                                    <input type="range" :min="concurrencyRanges.llm[0]" :max="concurrencyRanges.llm[1]" step="1" v-model.number="concurrencySettings.max_llm_jobs">
+                                    <span class="pipeline-note">
+                                        A local server (Ollama / LM Studio) serves one request at a time, so set this to
+                                        <strong>1-2</strong> — otherwise jobs queue <em>inside</em> the server and each blocks for
+                                        minutes while the app shows them all "running". Raise it for a high-throughput cloud
+                                        provider (Gemini / OpenRouter / Chutes).
+                                    </span>
+                                </div>
+                                <div class="quick-row" style="margin-top: 10px;">
+                                    <button class="btn btn-primary" @click="saveConcurrencySettings" :disabled="concurrencyBusy">
+                                        {{ concurrencyBusy ? 'Saving...' : 'Save Concurrency Limits' }}
+                                    </button>
+                                    <button class="btn btn-secondary" @click="loadConcurrencySettings" :disabled="concurrencyBusy">
+                                        Reload
+                                    </button>
+                                </div>
+                                <div v-if="concurrencyError" class="maintenance-fail" style="margin-top: 8px;">{{ concurrencyError }}</div>
+                                <div v-if="concurrencySuccess" class="maintenance-ok" style="margin-top: 8px;">{{ concurrencySuccess }}</div>
+                            </div>
+                        </div>
+
                         <!-- Actions Card -->
                         <div class="window" style="padding: 10px;">
                             <div class="quick-row" style="margin-bottom: 10px;">
@@ -4345,7 +4392,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=170"></script>
+    <script src="/static/js/app.js?v=171"></script>
 </body>
 </html>
 

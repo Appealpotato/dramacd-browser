@@ -899,6 +899,7 @@ const app = createApp({
             openai_compat: false,
             translation: false,
             whisper: false,
+            concurrency: false,
             seiyuu: false,
             maintenance: false,
             ops: false,
@@ -1184,6 +1185,15 @@ const app = createApp({
         const whisperSettingsBusy = ref(false);
         const whisperSettingsError = transientRef('');
         const whisperSettingsSuccess = transientRef('');
+
+        // How many transcription / translation jobs run at once before the rest
+        // wait in a visible "Queued" state (stops the local-GPU pile-up where
+        // everything shows "running · 0/N" while really queued inside Ollama).
+        const concurrencySettings = ref({ max_whisper_jobs: 1, max_llm_jobs: 3 });
+        const concurrencyRanges = ref({ whisper: [1, 8], llm: [1, 16] });
+        const concurrencyBusy = ref(false);
+        const concurrencyError = transientRef('');
+        const concurrencySuccess = transientRef('');
         let transcriptionPollInterval = null;
         let autoTranslatePollInterval = null;
         let metadataTranslateTimer = null;
@@ -3798,7 +3808,10 @@ const app = createApp({
             const jobLabel = pipelineJobLabel(job);
             const isAutopilot = job?.job_type === 'pipeline_autopilot';
 
-            if (s === 'queued') return `Queued: ${jobLabel}`;
+            // A job parked on the concurrency gate stays 'queued' but sets a
+            // reason in `current` — surface it so "waiting for a slot" reads
+            // clearly distinct from a stuck/0% running job.
+            if (s === 'queued') return current ? `Queued · ${current}` : `Queued: ${jobLabel}`;
             if (s === 'completed') return isAutopilot ? 'All stages done' : `${jobLabel}: done`;
             if (s === 'failed') return current ? `Failed during: ${current}` : `${jobLabel} failed`;
             if (s === 'stopped') return current ? `Stopped during: ${current}` : `${jobLabel} stopped`;
@@ -6209,6 +6222,7 @@ const app = createApp({
             activeTab.value = 'api';
             await loadApiSettings();
             await loadWhisperSettings();
+            await loadConcurrencySettings();
             await loadScanPaths();
             await loadGamesScanPaths();
         }
@@ -6279,6 +6293,64 @@ const app = createApp({
                 whisperSettingsError.value = 'Failed to save Whisper settings';
             } finally {
                 whisperSettingsBusy.value = false;
+            }
+        }
+
+        async function loadConcurrencySettings() {
+            concurrencyBusy.value = true;
+            concurrencyError.value = '';
+            try {
+                const resp = await fetch('/api/settings/concurrency');
+                if (!resp.ok) {
+                    concurrencyError.value = `Failed to load concurrency settings (${resp.status})`;
+                    return;
+                }
+                const data = await resp.json();
+                concurrencySettings.value = {
+                    max_whisper_jobs: Number(data.max_whisper_jobs) || 1,
+                    max_llm_jobs: Number(data.max_llm_jobs) || 3,
+                };
+                if (Array.isArray(data.max_whisper_jobs_range)) concurrencyRanges.value.whisper = data.max_whisper_jobs_range;
+                if (Array.isArray(data.max_llm_jobs_range)) concurrencyRanges.value.llm = data.max_llm_jobs_range;
+            } catch (err) {
+                console.error('Failed to load concurrency settings:', err);
+                concurrencyError.value = 'Failed to load concurrency settings';
+            } finally {
+                concurrencyBusy.value = false;
+            }
+        }
+
+        async function saveConcurrencySettings() {
+            concurrencyBusy.value = true;
+            concurrencyError.value = '';
+            concurrencySuccess.value = '';
+            try {
+                const body = {
+                    max_whisper_jobs: Number(concurrencySettings.value.max_whisper_jobs) || 1,
+                    max_llm_jobs: Number(concurrencySettings.value.max_llm_jobs) || 3,
+                };
+                const resp = await fetch('/api/settings/concurrency', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+                if (!resp.ok) {
+                    concurrencyError.value = data.detail || `Save failed (${resp.status})`;
+                    return;
+                }
+                concurrencySettings.value = {
+                    max_whisper_jobs: Number(data.max_whisper_jobs) || 1,
+                    max_llm_jobs: Number(data.max_llm_jobs) || 3,
+                };
+                // Takes effect for the next job to start — already-running jobs
+                // keep their slot until they finish.
+                concurrencySuccess.value = 'Saved. Applies to the next job that starts.';
+            } catch (err) {
+                console.error('Failed to save concurrency settings:', err);
+                concurrencyError.value = 'Failed to save concurrency settings';
+            } finally {
+                concurrencyBusy.value = false;
             }
         }
 
@@ -9345,6 +9417,7 @@ const app = createApp({
                 loadOpsPanel(),
                 loadPipelineStatus(),
                 loadApiSettings(),
+                loadConcurrencySettings(),
             ];
             // If persisted subtab is 'games', kick its initial load too.
             if (librarySubtab.value === 'games') {
@@ -9979,6 +10052,9 @@ const app = createApp({
             whisperSettings, whisperSupportedModels, whisperSettingsBusy,
             whisperSettingsError, whisperSettingsSuccess,
             loadWhisperSettings, saveWhisperSettings,
+            concurrencySettings, concurrencyRanges, concurrencyBusy,
+            concurrencyError, concurrencySuccess,
+            loadConcurrencySettings, saveConcurrencySettings,
             hasActiveFilters, scanPercent, fetchPercent, failureReasonEntries,
             selectedCount, allVisibleSelected, bulkLoading, bulkMessage, bulkError, bulkMenuOpen,
             parseJson, coverUrl, dlsiteUrl, isDlsiteCode, vgmdbSearchUrl,

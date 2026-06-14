@@ -4,7 +4,13 @@ from datetime import datetime
 from pathlib import Path
 
 import database as db
+from pipeline.concurrency import DynamicSemaphore
 from pipeline.transcriber import WhisperTranscriber
+
+# Cap concurrent transcription jobs across the process. Whisper is GPU-bound and
+# a single GPU decodes one stream at a time, so >1 concurrent job just thrashes
+# VRAM and slows everything. Runtime-tunable (Settings → Concurrency); default 1.
+_whisper_semaphore = DynamicSemaphore(db.get_runtime_max_whisper_jobs, name="Whisper", default=1)
 
 # hotwords are resent with every ~30s decoding window — keep the bias text
 # short so it doesn't crowd out the window's own prompt budget.
@@ -38,6 +44,36 @@ def _build_hotwords(item: dict, glossary: str = "") -> str | None:
 
 
 async def run_transcription_job(job_id: int):
+    """Public entry point — wraps the worker in a DynamicSemaphore so the
+    max-concurrent-transcriptions cap is enforced no matter who queued the job
+    (manual, autopilot, bulk). While waiting for a slot the job stays 'queued'
+    with a human-readable reason so it doesn't look stuck."""
+    job = await db.get_job(job_id)
+    if not job or job.get("job_type") != "pipeline_transcribe":
+        return
+    if await _whisper_semaphore.would_wait():
+        limit = await db.get_runtime_max_whisper_jobs()
+        await db.update_job(job_id, current=f"Waiting for a free transcription slot (max {limit} at once)")
+        await db.append_job_event(
+            job_id,
+            "info",
+            f"Queued — waiting for a free transcription slot (max {limit} running at once)",
+            {"max_whisper_jobs": limit},
+        )
+    async with _whisper_semaphore:
+        # Re-fetch in case the job was stopped while it waited for a slot.
+        job_now = await db.get_job(job_id)
+        if not job_now:
+            return
+        st = str(job_now.get("status") or "").lower()
+        if st in {"stopping", "stopped", "failed"}:
+            if st == "stopping":
+                await db.update_job(job_id, status="stopped", stopped=1, finished_at=datetime.now().isoformat())
+            return
+        await _run_transcription_job_inner(job_id)
+
+
+async def _run_transcription_job_inner(job_id: int):
     """
     Background job to auto-transcribe all tracks for an item using Whisper.
     Mirrors the pattern of run_extraction_job.

@@ -13,6 +13,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        n = default
+    return max(lo, min(hi, n))
+
+
 # Base directory of the application
 APP_DIR = Path(__file__).parent
 
@@ -20,7 +28,10 @@ APP_DIR = Path(__file__).parent
 SCAN_PATH = os.environ.get("DRAMACD_SCAN_PATH", "").strip()
 
 # Server settings
-HOST = "0.0.0.0"
+# Local-only by default. Set DRAMACD_BIND_ALL=1 to expose the app on the LAN.
+HOST = os.environ.get("DRAMACD_HOST", "").strip() or (
+    "0.0.0.0" if _env_bool("DRAMACD_BIND_ALL", default=False) else "127.0.0.1"
+)
 PORT = int(os.environ.get("DRAMACD_PORT", "8080"))
 API_KEY = os.environ.get("DRAMACD_API_KEY", "").strip() or None
 ENABLE_PIPELINE = _env_bool("DRAMACD_ENABLE_PIPELINE", default=False)
@@ -62,6 +73,17 @@ try:
 except ValueError:
     WHISPER_BATCH_SIZE = 0
 FFMPEG_PATH = os.environ.get("DRAMACD_FFMPEG_PATH", "").strip() or None
+
+# Pipeline concurrency caps (defaults; overridable at runtime via Settings).
+# These bound how many jobs hit a shared, serial resource at once:
+#   - Whisper transcription is GPU-bound — a single GPU does one decode at a
+#     time, so >1 concurrent job just thrashes VRAM. Default 1.
+#   - LLM translation is bound by the provider. A local box (Ollama/LM Studio)
+#     serves one request at a time, so 6 "parallel" jobs really queue inside
+#     the server and each blocks for minutes. Default 3 — a sane middle ground;
+#     drop to 1-2 for a local GPU, raise for a high-throughput cloud provider.
+MAX_WHISPER_JOBS = _env_int("DRAMACD_MAX_WHISPER_JOBS", 1, 1, 8)
+MAX_LLM_JOBS = _env_int("DRAMACD_MAX_LLM_JOBS", 3, 1, 16)
 
 # Translation provider settings
 GEMINI_API_KEY = os.environ.get("DRAMACD_GEMINI_API_KEY", "").strip() or None

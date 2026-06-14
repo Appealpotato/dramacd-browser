@@ -267,6 +267,12 @@ class WhisperSettingsUpdateRequest(BaseModel):
     word_timestamps: Optional[bool] = None
 
 
+class ConcurrencySettingsUpdateRequest(BaseModel):
+    # How many jobs may run at once before the rest wait in a visible queue.
+    max_whisper_jobs: Optional[int] = None  # transcription (GPU-bound)
+    max_llm_jobs: Optional[int] = None      # translation (provider-bound)
+
+
 TOKUTEN_KINDS = {"audio", "book", "image", "misc"}
 # "source" filter values exposed in the Tokutens sidebar. Stored as `shop`
 # on the tokutens row for legacy reasons. Migration 015 maps the old set
