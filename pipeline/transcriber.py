@@ -9,6 +9,37 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+
+def _bootstrap_cuda_runtime() -> None:
+    """Make the pip-installed CUDA 12 runtime usable for CTranslate2 on Windows.
+
+    CTranslate2 4.x (used by faster-whisper 1.2.x) needs the CUDA 12 cuBLAS/cuDNN
+    DLLs (e.g. cublas64_12.dll), shipped by the nvidia-cublas-cu12 / nvidia-cudnn-cu12
+    wheels. On Windows those land in site-packages\\nvidia\\*\\bin, which is NOT on the
+    DLL search path by default, so we register each one explicitly before ctranslate2
+    is imported (device detection and model load both import it). We also set
+    KMP_DUPLICATE_LIB_OK, because torch and CTranslate2 each bundle an OpenMP runtime
+    and the duplicate would otherwise abort the process.
+    """
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    if not hasattr(os, "add_dll_directory"):  # non-Windows: nothing to do
+        return
+    try:
+        import glob
+
+        import nvidia
+
+        nvidia_root = list(nvidia.__path__)[0]
+        for bin_dir in glob.glob(os.path.join(nvidia_root, "*", "bin")):
+            os.add_dll_directory(bin_dir)
+    except Exception:
+        # If the wheels aren't installed (e.g. CPU-only host), let CTranslate2
+        # surface its own error later rather than masking it here.
+        pass
+
+
+_bootstrap_cuda_runtime()
+
 from config import FFMPEG_PATH, WHISPER_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
