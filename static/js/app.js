@@ -2422,17 +2422,13 @@ const app = createApp({
             };
             detailEditing.value = true;
             detailSaveError.value = '';
-            // Codeless entries (folder/loose-archive imports, hand-created
-            // cards) with no metadata yet: pre-run the multi-source search
-            // with the title so matches are already waiting when the panel
-            // opens. Hand-edited entries (cast/description present) are
-            // assumed matched and left alone.
-            const placeholder = !s.title || s.title === '[New Drama CD]' || s.title === '[New Tokuten]';
-            const hasMeta = (parseJson(s.seiyuu) || []).length > 0 || !!(s.description || '').trim();
-            if (s.is_manual && !placeholder && !hasMeta && !metaSearchQuery.value) {
-                metaSearchQuery.value = s.title;
-                runMetaSearch(s.title);
-            }
+            // Metadata-source search (Gamers / Chil-Chil / Rejet) is user-
+            // initiated only: opening the editor no longer auto-fills the title
+            // or fires a search (it was running on every open, which is noise).
+            // Start clean so a previous item's query/results don't linger.
+            if (_metaSearchTimer) { clearTimeout(_metaSearchTimer); _metaSearchTimer = null; }
+            metaSearchQuery.value = '';
+            metaSearchResults.value = [];
         }
         function cancelDetailEdit() {
             detailEditing.value = false;
