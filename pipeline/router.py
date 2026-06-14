@@ -50,6 +50,14 @@ def _whisper_runtime_ready() -> bool:
     return shutil.which("ffmpeg") is not None
 
 
+def _normalize_archive_member_path(path: str) -> str:
+    normalized = (path or "").replace("\\", "/").lstrip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts or any(part == ".." for part in parts):
+        raise HTTPException(status_code=400, detail="Invalid archive member path")
+    return "/".join(parts)
+
+
 async def _ensure_pipeline_enabled():
     enabled = await db.get_pipeline_enabled()
     if not enabled:
@@ -259,15 +267,16 @@ async def get_archive_thumb(item_id: int, path: str = Query(..., min_length=1)):
     item = await db.get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+    member_path = _normalize_archive_member_path(path)
     # Sanity: only thumbnail recognized image extensions.
-    ext = Path(path).suffix.lower()
+    ext = Path(member_path).suffix.lower()
     if ext not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}:
         raise HTTPException(status_code=400, detail="Not an image extension")
 
     from config import PIPELINE_WORK_DIR
     cache_dir = PIPELINE_WORK_DIR / "archive-thumbs" / str(item_id)
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_name = hashlib.sha1(path.encode("utf-8")).hexdigest() + ".jpg"
+    cache_name = hashlib.sha1(member_path.encode("utf-8")).hexdigest() + ".jpg"
     cache_path = cache_dir / cache_name
 
     if cache_path.exists():
@@ -285,13 +294,17 @@ async def get_archive_thumb(item_id: int, path: str = Query(..., min_length=1)):
     last_err = None
     for archive in archives:
         try:
-            raw = stream_archive_file(archive, path)
+            files = list_archive_contents(archive)
+            member_names = {str(f.get("path") or "").replace("\\", "/") for f in files}
+            if member_path not in member_names:
+                continue
+            raw = stream_archive_file(archive, member_path)
             if raw:
                 break
         except Exception as exc:
             last_err = exc
     if not raw:
-        raise HTTPException(status_code=404, detail=f"Couldn't extract {path}: {last_err}")
+        raise HTTPException(status_code=404, detail=f"Couldn't extract {member_path}: {last_err}")
 
     try:
         from PIL import Image
@@ -1293,9 +1306,10 @@ async def delete_transcript_run(track_id: int, run_id: int, _auth=Depends(requir
     run = await db.get_transcript_run(run_id)
     if not run or int(run.get("track_id")) != track_id:
         raise HTTPException(status_code=404, detail="Transcript run not found")
-    await db.delete_transcript_segments(run_id)
-    await db.delete_transcript_run(run_id)
-    return {"status": "deleted", "run_id": run_id, "track_id": track_id}
+    # Also remove the replicated copies on sibling tracks so the group's
+    # transcript/translation badges clear (they sum across all variants).
+    result = await db.delete_transcript_run_and_replicas(track_id, run_id)
+    return {"status": "deleted", "run_id": run_id, "track_id": track_id, **result}
 
 
 @router.delete("/tracks/{track_id}/translations/{run_id}")
@@ -1309,16 +1323,12 @@ async def delete_translation_run(track_id: int, run_id: int, _auth=Depends(requi
     if not run or int(run.get("track_id")) != track_id:
         raise HTTPException(status_code=404, detail="Translation run not found")
 
-    # Clear from active if this is the active run
-    if int(track.get("active_translation_run_id") or 0) == run_id:
-        await db.set_track_active_translation(track_id, None)
+    # Delete this run AND the replicated copies on sibling tracks (same audio,
+    # different codec/variant), clearing each active pointer — otherwise the
+    # group's translation badge stays lit because siblings still hold a copy.
+    result = await db.delete_translation_run_and_replicas(track_id, run_id)
 
-    # Delete all segments for this run
-    await db.delete_translation_segments(run_id)
-    # Delete the run itself
-    await db.delete_translation_run(run_id)
-
-    return {"status": "deleted", "run_id": run_id, "track_id": track_id}
+    return {"status": "deleted", "run_id": run_id, "track_id": track_id, **result}
 
 
 def _resolve_ffmpeg() -> str | None:

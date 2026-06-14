@@ -7925,6 +7925,9 @@ const app = createApp({
                 pipelineLoadError.value = '';
                 pushToast({ kind: 'success', title: 'Transcript deleted', ttl: 3000 });
                 await loadPipelineRuns();
+                // Refresh the track-list run counts so the transcript/translation
+                // status icons update immediately (delete also clears sibling copies).
+                await refreshPipelineTrackList();
             } catch (err) {
                 pipelineLoadError.value = 'Failed to delete transcript';
                 console.error('Delete failed:', err);
@@ -7948,6 +7951,9 @@ const app = createApp({
                 pipelineLoadError.value = '';
                 pushToast({ kind: 'success', title: 'Translation deleted', ttl: 3000 });
                 await loadPipelineRuns();
+                // Refresh the track-list run counts so the translation status icon
+                // updates immediately (delete also clears sibling copies).
+                await refreshPipelineTrackList();
             } catch (err) {
                 pipelineLoadError.value = 'Failed to delete translation';
                 console.error('Delete failed:', err);

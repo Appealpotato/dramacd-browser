@@ -5739,6 +5739,86 @@ async def delete_translation_segments(run_id: int) -> int:
         await db.close()
 
 
+async def _group_sibling_track_ids(track_id: int) -> list[int]:
+    """Other track ids in the same recording group as track_id — the SAME
+    grouping that sums the transcript/translation badges in the UI. Used so a
+    delete can reach the replicated copies on FLAC/MP3/no-SFX siblings."""
+    track = await get_pipeline_track(track_id)
+    if not track or not track.get("item_id"):
+        return []
+    groups = await get_pipeline_track_groups(int(track["item_id"]))
+    tid = int(track_id)
+    for g in groups:
+        ids = [int(t["id"]) for t in (g.get("tracks") or []) if t.get("id") is not None]
+        if tid in ids:
+            return [i for i in ids if i != tid]
+    return []
+
+
+async def delete_translation_run_and_replicas(track_id: int, run_id: int) -> dict:
+    """Delete a translation run AND the copies `replicate_translation_run_to_
+    siblings` pushed onto sibling tracks, so the group's translation badge
+    actually clears (it sums run-counts across all variants). Replicas are
+    matched within the group by identical (target_language, segment_count) —
+    the signature of a copied run. Returns the deleted run ids + tracks."""
+    src = await get_translation_run(run_id)
+    deleted: list[int] = []
+    affected: set[int] = set()
+    if not src:
+        return {"deleted_run_ids": deleted, "tracks": []}
+    target_language = src.get("target_language")
+    src_seg_count = len(await get_translation_segments(run_id))
+
+    async def _drop(tid: int, rid: int) -> None:
+        t = await get_pipeline_track(tid)
+        if t and int(t.get("active_translation_run_id") or 0) == rid:
+            await set_track_active_translation(tid, None)
+        await delete_translation_segments(rid)
+        await delete_translation_run(rid)
+        deleted.append(rid)
+        affected.add(tid)
+
+    await _drop(int(track_id), int(run_id))
+    for sib in await _group_sibling_track_ids(track_id):
+        for r in await list_translation_runs(sib, target_language):
+            if int(r.get("segment_count") or 0) != src_seg_count:
+                continue
+            await _drop(int(sib), int(r["id"]))
+    return {"deleted_run_ids": deleted, "tracks": sorted(affected)}
+
+
+async def delete_transcript_run_and_replicas(track_id: int, run_id: int) -> dict:
+    """Delete a transcript run AND its sibling replicas (same group, identical
+    segment_count). Deleting a transcript cascades to its dependent translation
+    runs via FK, so this clears both badges across the group at once."""
+    src = await get_transcript_run(run_id)
+    deleted: list[int] = []
+    affected: set[int] = set()
+    if not src:
+        return {"deleted_run_ids": deleted, "tracks": []}
+    src_rows = await list_transcript_runs(track_id)
+    src_seg_count = next(
+        (int(r.get("segment_count") or 0) for r in src_rows if int(r["id"]) == int(run_id)),
+        None,
+    )
+
+    async def _drop(tid: int, rid: int) -> None:
+        # FK ON DELETE SET NULL clears the active pointer; CASCADE drops the
+        # run's segments and any dependent translation runs.
+        await delete_transcript_segments(rid)
+        await delete_transcript_run(rid)
+        deleted.append(rid)
+        affected.add(tid)
+
+    await _drop(int(track_id), int(run_id))
+    for sib in await _group_sibling_track_ids(track_id):
+        for r in await list_transcript_runs(sib):
+            if src_seg_count is not None and int(r.get("segment_count") or 0) != src_seg_count:
+                continue
+            await _drop(int(sib), int(r["id"]))
+    return {"deleted_run_ids": deleted, "tracks": sorted(affected)}
+
+
 async def update_transcript_segment_text(run_id: int, segment_index: int, text: str) -> dict | None:
     """Edit a single transcript segment's text in place.
 
