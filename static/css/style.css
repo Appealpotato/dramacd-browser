@@ -8,7 +8,7 @@
    to the default chunky OS bar. */
 * {
     scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+    scrollbar-color: color-mix(in srgb, var(--text) 25%, transparent) transparent;
 }
 *::-webkit-scrollbar {
     width: 8px;
@@ -18,13 +18,13 @@
     background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.14);
+    background: color-mix(in srgb, var(--text) 18%, transparent);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.28);
+    background: color-mix(in srgb, var(--text) 32%, transparent);
     background-clip: content-box;
 }
 *::-webkit-scrollbar-corner {
@@ -57,7 +57,7 @@ html {
     --tag-text: #a8b2c8;
     --radius: 8px;
     --radius-sm: 4px;
-    --shadow: 0 4px 12px rgba(0,0,0,0.3);
+    --shadow: 0 4px 12px color-mix(in srgb, var(--shadow-tint, #000) 30%, transparent);
     --transition: 0.2s ease;
 }
 
@@ -193,11 +193,11 @@ select:focus { border-color: var(--accent); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-danger {
-    background: #d32f2f;
+    background: var(--danger);
     color: white;
     border: none;
 }
-.btn-danger:hover { background: #b71c1c; }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 80%, #000); }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-secondary {
@@ -438,7 +438,13 @@ select:focus { border-color: var(--accent); }
     transition: opacity 0.12s ease, transform 0.12s ease;
 }
 .card-quick-actions .icon-btn {
+    /* Sits over arbitrary cover art, so it intentionally stays a fixed dark
+       scrim with a light icon + border — legible on ANY cover and ANY theme.
+       (Without pinning the color, it inherits --text-muted, which is dark on
+       the light themes and vanishes against the scrim.) */
     background: rgba(0, 0, 0, 0.5);
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.25);
     backdrop-filter: blur(4px);
     transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
@@ -492,7 +498,7 @@ select:focus { border-color: var(--accent); }
     border: none;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(4px);
-    color: var(--text-bright);
+    color: #ffffff;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
@@ -533,7 +539,7 @@ select:focus { border-color: var(--accent); }
     height: 8px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--shadow-tint, #000) 35%, transparent);
     z-index: 2;
 }
 
@@ -834,7 +840,7 @@ select:focus { border-color: var(--accent); }
     border-radius: var(--radius-sm);
     font-size: 10px;
     font-weight: 700;
-    color: var(--text-bright);
+    color: #ffffff;
     letter-spacing: 0.5px;
 }
 
@@ -858,21 +864,21 @@ select:focus { border-color: var(--accent); }
 }
 
 .confidence-badge.low {
-    background: rgba(255, 165, 2, 0.2);
+    background: color-mix(in srgb, var(--warning) 20%, transparent);
     color: var(--warning);
-    border: 1px solid rgba(255, 165, 2, 0.4);
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
 }
 
 .confidence-badge.high {
-    background: rgba(46, 213, 115, 0.15);
+    background: color-mix(in srgb, var(--success) 15%, transparent);
     color: var(--success);
-    border: 1px solid rgba(46, 213, 115, 0.3);
+    border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
 }
 
 .confidence-badge.verified {
-    background: rgba(46, 213, 115, 0.25);
+    background: color-mix(in srgb, var(--success) 25%, transparent);
     color: var(--success);
-    border: 1px solid rgba(46, 213, 115, 0.5);
+    border: 1px solid color-mix(in srgb, var(--success) 50%, transparent);
 }
 
 .override-section p { line-height: 1.4; }
@@ -1108,7 +1114,7 @@ select:focus { border-color: var(--accent); }
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 4px 20px color-mix(in srgb, var(--shadow-tint, #000) 45%, transparent);
     padding: 8px 12px;
     pointer-events: none;
     max-width: 280px;
@@ -1149,7 +1155,7 @@ select:focus { border-color: var(--accent); }
     height: 10px;
     border-radius: 50%;
     display: inline-block;
-    border: 1px solid rgba(255,255,255,0.3);
+    border: 1px solid var(--border);
 }
 
 .status-dot.not_translated { background: var(--text-muted); }
@@ -1173,7 +1179,7 @@ select:focus { border-color: var(--accent); }
     background: var(--bg-modal);
     height: 100vh;
     overflow-y: auto;
-    box-shadow: -4px 0 20px rgba(0,0,0,0.5);
+    box-shadow: -4px 0 20px color-mix(in srgb, var(--shadow-tint, #000) 50%, transparent);
     display: flex;
     flex-direction: column;
 }
@@ -1297,10 +1303,10 @@ select:focus { border-color: var(--accent); }
 
 .tag {
     padding: 3px 10px;
-    background: var(--tag-bg);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
     border-radius: 20px;
     font-size: 11px;
-    color: var(--tag-text);
+    color: var(--text);
 }
 
 .tag.custom {
@@ -1511,7 +1517,7 @@ textarea.notes-input:focus { border-color: var(--accent); }
     background: linear-gradient(
         90deg,
         transparent,
-        rgba(255, 255, 255, 0.3),
+        color-mix(in srgb, var(--text) 22%, transparent),
         transparent
     );
     animation: shimmer 2s infinite;
@@ -1642,10 +1648,11 @@ textarea.notes-input:focus { border-color: var(--accent); }
     --star-empty: #5a4e62;
     --success: #92c9a7;
     --warning: #e0ba8d;
+    --danger: #d33f3f;
     --tag-bg: #322b39;
     --tag-text: #cabdcd;
     --radius: 10px;
-    --shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    --shadow: 0 10px 24px color-mix(in srgb, var(--shadow-tint, #000) 25%, transparent);
 }
 
 body {
@@ -1660,7 +1667,7 @@ body {
 }
 
 .app-header {
-    background: rgba(42, 36, 48, 0.92);
+    background: var(--bg-card);
     backdrop-filter: blur(8px);
     padding: 10px 16px;
     display: grid;
@@ -1730,13 +1737,13 @@ select, .filter-select {
 }
 
 .btn-success {
-    background: rgba(146, 201, 167, 0.18);
-    border-color: rgba(146, 201, 167, 0.45);
-    color: #bfe4cc;
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    border-color: color-mix(in srgb, var(--success) 45%, transparent);
+    color: var(--success);
 }
 
 .btn-success:hover {
-    background: rgba(146, 201, 167, 0.26);
+    background: color-mix(in srgb, var(--success) 26%, transparent);
 }
 
 .header-actions {
@@ -1747,7 +1754,7 @@ select, .filter-select {
 .scan-paths-panel,
 .fetch-summary,
 .progress-overlay {
-    background: rgba(42, 36, 48, 0.88);
+    background: var(--bg-card);
     box-shadow: var(--shadow);
 }
 
@@ -1774,7 +1781,7 @@ select, .filter-select {
     padding: 4px 8px;
     border: 1px solid var(--border);
     border-radius: 999px;
-    background: rgba(42, 36, 48, 0.45);
+    background: var(--bg-card);
 }
 
 .main-content {
@@ -1832,7 +1839,10 @@ select, .filter-select {
     min-height: 0;
     height: calc(100vh - 30px) !important;
     max-height: calc(100vh - 30px) !important;
-    padding: 0 0 24px 0;
+    /* Horizontal padding gives the child .window drop-shadows room to render
+       INSIDE the overflow clip box — without it, overflow-x:hidden crops the
+       shadows flush at the column edges (very visible on the light themes). */
+    padding: 0 12px 24px 12px;
     box-sizing: border-box;
     /* Scrollbar styling now lives globally on `*` near the top of the file. */
 }
@@ -1859,10 +1869,13 @@ select, .filter-select {
 }
 
 .window {
-    background: rgba(42, 36, 48, 0.9);
+    background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    box-shadow: var(--shadow);
+    /* Tight shadow (not the big --shadow) — windows sit inside overflow-
+       clipping scroll columns, so a small extent avoids cropped shadow edges
+       (very visible on light themes). Modals keep their own larger shadows. */
+    box-shadow: 0 2px 10px color-mix(in srgb, var(--shadow-tint, #000) 35%, transparent);
 }
 
 .control-window {
@@ -2045,7 +2058,7 @@ select, .filter-select {
 
 /* === Bulk Workflow UI === */
 .bulk-bar {
-    margin-bottom: 8px;
+    margin: 0 16px 8px 16px;
     padding: 0;
     display: flex;
     flex-direction: column;
@@ -2195,6 +2208,9 @@ select, .filter-select {
 
 .tab-strip {
     padding: 8px;
+    /* Side margin aligns with the content grid below AND gives the window
+       drop-shadow room inside the overflow-clipped .library-column. */
+    margin: 0 16px;
     display: flex;
     gap: 8px;
     flex-shrink: 0; /* Prevent tab strip from shrinking */
@@ -2217,7 +2233,7 @@ select, .filter-select {
     display: flex;
     gap: 4px;
     padding: 6px 8px;
-    margin-bottom: 6px;
+    margin: 0 16px 6px 16px;
     flex-shrink: 0;
 }
 .library-subtab-btn {
@@ -2478,8 +2494,8 @@ select, .filter-select {
     cursor: not-allowed;
 }
 .icon-btn-danger:hover:not(:disabled) {
-    color: #ff6464;
-    border-color: color-mix(in srgb, #ff6464 55%, var(--border));
+    color: var(--danger);
+    border-color: color-mix(in srgb, var(--danger) 55%, var(--border));
 }
 .icon-btn-confirm {
     color: var(--accent);
@@ -2550,7 +2566,7 @@ select, .filter-select {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 6px 24px color-mix(in srgb, var(--shadow-tint, #000) 40%, transparent);
 }
 .workshop-search-empty {
     padding: 10px 12px;
@@ -2790,7 +2806,7 @@ input[type="number"]::-webkit-outer-spin-button {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 6px;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 6px 24px color-mix(in srgb, var(--shadow-tint, #000) 40%, transparent);
     overflow: hidden;
 }
 .archive-export-heading {
@@ -3088,7 +3104,7 @@ input[type="number"]::-webkit-outer-spin-button {
     height: 6px;
     border-radius: 50%;
     background: var(--accent);
-    box-shadow: 0 0 6px rgba(232, 72, 106, 0.6);
+    box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .glossary-summary {
     margin-left: auto;
@@ -3117,7 +3133,7 @@ input[type="number"]::-webkit-outer-spin-button {
 .glossary-input:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(232, 72, 106, 0.18);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .pipeline-json {
@@ -3225,7 +3241,7 @@ input[type="number"]::-webkit-outer-spin-button {
 .segment-edit-btn:hover {
     color: var(--accent);
     border-color: var(--accent);
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-hover);
 }
 .segment-edited-badge {
     font-size: 9px;
@@ -3262,7 +3278,7 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 .segment-edit-textarea:focus {
     outline: none;
-    box-shadow: 0 0 0 2px rgba(232, 72, 106, 0.25);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 .segment-edit-actions {
     display: flex;
@@ -3288,7 +3304,7 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 .player-stage-edit-btn {
     background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    border: 1px solid var(--border);
     color: var(--text-muted);
     border-radius: 4px;
     padding: 0 6px;
@@ -3507,7 +3523,7 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 .section-header:hover {
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--bg-hover);
 }
 
 .section-content {
@@ -3550,13 +3566,13 @@ input[type="number"]::-webkit-outer-spin-button {
     gap: 8px;
     padding: 6px 10px;
     border-radius: 6px;
-    background: rgba(42, 36, 48, 0.45);
+    background: var(--bg-card);
     border: 1px solid var(--border);
     transition: all 0.3s ease;
 }
 
 .workshop-status-indicator.active {
-    background: rgba(46, 213, 115, 0.12);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
     border-color: var(--success);
 }
 
@@ -3589,7 +3605,7 @@ input[type="number"]::-webkit-outer-spin-button {
     color: var(--text-muted);
     margin-top: 8px;
     padding: 6px 8px;
-    background: rgba(255, 165, 2, 0.08);
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
     border-left: 2px solid var(--warning);
     border-radius: 3px;
 }
@@ -3694,7 +3710,7 @@ input[type="number"]::-webkit-outer-spin-button {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: 8px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-tint, #000) 55%, transparent);
     z-index: 50;
     opacity: 0;
     transform: translateY(-4px);
@@ -3833,8 +3849,8 @@ input[type="number"]::-webkit-outer-spin-button {
 
 /* Readonly inputs (auto-filled from Library selection) */
 input[readonly] {
-    background: rgba(74, 158, 255, 0.1) !important;
-    border-color: #4a9eff !important;
+    background: color-mix(in srgb, var(--accent) 10%, transparent) !important;
+    border-color: var(--accent) !important;
     cursor: not-allowed;
     color: var(--text-muted);
 }
@@ -4136,7 +4152,7 @@ input[type="radio"]:disabled {
     color: var(--text-muted);
     font-size: 11px;
 }
-.seiyuu-preview-before { color: #ff5470; }
+.seiyuu-preview-before { color: var(--danger); }
 .seiyuu-preview-after { color: var(--success); }
 
 .seiyuu-suggest-block { margin-top: 8px; }
@@ -4240,7 +4256,7 @@ input[type="radio"]:disabled {
     max-height: 80vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+    box-shadow: 0 12px 40px color-mix(in srgb, var(--shadow-tint, #000) 55%, transparent);
 }
 .unmatched-modal-header {
     padding: 12px 16px;
@@ -4436,7 +4452,7 @@ input[type="radio"]:disabled {
 .player-close-btn:hover {
     background: var(--bg-hover);
     color: var(--text);
-    border-color: rgba(255,255,255,0.1);
+    border-color: var(--border);
 }
 
 .player-header-title {
@@ -4568,7 +4584,7 @@ input[type="radio"]:disabled {
 
 .control-btn:hover:not(:disabled) {
     background: var(--bg-hover);
-    border-color: rgba(255,255,255,0.1);
+    border-color: var(--border);
     transform: translateY(-2px);
 }
 
@@ -4654,7 +4670,7 @@ input[type="radio"]:disabled {
 
 .transcript-card:hover {
     background: var(--bg-hover);
-    border-color: rgba(255,255,255,0.08);
+    border-color: var(--border);
 }
 
 .transcript-card.active {
@@ -4820,7 +4836,7 @@ input[type="radio"]:disabled {
     transform: none;
 }
 .track-missing-pill {
-    color: #e0a23f;
+    color: var(--warning);
 }
 
 /* Banner above the track list when some/all audio files are missing on
@@ -4831,10 +4847,10 @@ input[type="radio"]:disabled {
     gap: 8px;
     padding: 8px 12px;
     margin-bottom: 10px;
-    border: 1px solid rgba(224, 162, 63, 0.45);
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
     border-radius: 6px;
-    background: rgba(224, 162, 63, 0.08);
-    color: #e0a23f;
+    background: color-mix(in srgb, var(--warning) 8%, transparent);
+    color: var(--warning);
     font-size: 0.82rem;
 }
 .player-missing-audio-banner svg {
@@ -4939,8 +4955,8 @@ input[type="radio"]:disabled {
     animation: stage-resume-pulse 2s ease-in-out infinite;
 }
 @keyframes stage-resume-pulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(232, 72, 106, 0.4); }
-    50%      { box-shadow: 0 0 0 8px rgba(232, 72, 106, 0); }
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+    50%      { box-shadow: 0 0 0 8px transparent; }
 }
 
 .player-stage-spacer { width: 36px; height: 36px; flex-shrink: 0; }
@@ -5018,7 +5034,7 @@ input[type="radio"]:disabled {
     user-select: none;
     border-radius: 12px;
 }
-.player-stage-line:hover { background: rgba(255,255,255,0.03); }
+.player-stage-line:hover { background: var(--bg-hover); }
 
 .player-stage-line-jp {
     font-size: 16px;
@@ -5040,7 +5056,7 @@ input[type="radio"]:disabled {
     font-size: 24px;
     font-weight: 600;
     color: var(--accent);
-    text-shadow: 0 0 24px rgba(232, 72, 106, 0.45);
+    text-shadow: 0 0 24px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .player-stage-line.active .player-stage-line-en {
     font-size: 16px;
@@ -5084,7 +5100,7 @@ input[type="radio"]:disabled {
     background: var(--accent);
     border-radius: 2px;
     transition: width 0.1s linear;
-    box-shadow: 0 0 8px rgba(232, 72, 106, 0.6);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
 }
 .player-stage-times {
     display: flex;
@@ -5205,7 +5221,9 @@ input[type="radio"]:disabled {
 }
 .player-stage-play:hover:not(:disabled) {
     background: var(--accent);
-    box-shadow: 0 0 18px rgba(232, 72, 106, 0.55);
+    /* Glow follows the active theme (--glow); falls back to the original
+       pink for the un-themed default. */
+    box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 /* --- Mobile (≤768px) --- */
@@ -5394,7 +5412,7 @@ input[type="radio"]:disabled {
 
 .detail-play-btn:hover:not(:disabled) {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 .detail-play-btn:active:not(:disabled) {
@@ -5478,7 +5496,7 @@ input[type="radio"]:disabled {
        library content underneath doesn't bleed through. */
     background: var(--bg);
     border-left: 1px solid var(--border);
-    box-shadow: -8px 0 24px rgba(0, 0, 0, 0.55);
+    box-shadow: -8px 0 24px color-mix(in srgb, var(--shadow-tint, #000) 55%, transparent);
     display: flex;
     flex-direction: column;
     z-index: 9000;
@@ -5602,7 +5620,7 @@ input[type="radio"]:disabled {
 }
 .activity-row.status-running .activity-row-status { color: var(--accent); }
 .activity-row.status-completed .activity-row-status { color: var(--text-muted); }
-.activity-row.status-failed .activity-row-status { color: #ff5470; }
+.activity-row.status-failed .activity-row-status { color: var(--danger); }
 
 /* Hover-only dismiss × in the top-right corner. Sits above the row's main
    content so it's not in the same visual axis as the Stop/Resume action
@@ -5708,7 +5726,7 @@ input[type="radio"]:disabled {
     word-break: break-word;
 }
 .activity-events-list .event-warn .event-msg { color: var(--star); }
-.activity-events-list .event-error .event-msg { color: #ff5470; }
+.activity-events-list .event-error .event-msg { color: var(--danger); }
 
 /* ----- Toasts ----- */
 .toast-stack {
@@ -5728,7 +5746,7 @@ input[type="radio"]:disabled {
     color: var(--text);
     padding: 10px 12px;
     border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-tint, #000) 55%, transparent);
     cursor: pointer;
     font-size: 12px;
 }
@@ -5737,7 +5755,7 @@ input[type="radio"]:disabled {
    warning stays amber so they remain distinguishable at a glance. */
 .toast-ok { border-left-color: var(--accent); }
 .toast-warn { border-left-color: var(--star); }
-.toast-fail { border-left-color: #ff5470; }
+.toast-fail { border-left-color: var(--danger); }
 .toast-title {
     font-weight: 600;
     color: var(--text-bright);
@@ -6155,7 +6173,7 @@ input[type="radio"]:disabled {
     height: 48px;
     border-radius: 4px;
     overflow: hidden;
-    background: var(--bg-dim, rgba(255, 255, 255, 0.04));
+    background: var(--bg-input);
     border: 1px solid var(--border);
 }
 .duplicates-modal-thumb img {
@@ -6347,7 +6365,7 @@ input[type="radio"]:disabled {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 16px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    box-shadow: 0 8px 32px color-mix(in srgb, var(--shadow-tint, #000) 50%, transparent);
 }
 .meta-preview-head {
     display: flex;

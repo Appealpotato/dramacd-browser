@@ -13,6 +13,11 @@ body.app-theme-starlit {
     --text-bright: #ffffff !important;
     --text-muted: #a893b5 !important;
     --accent: #e49ac6 !important;
+    /* --accent-hover / --accent-dim are hardcoded pink in the base :root
+       (style.css "Compact Theme Override"), so every theme must re-derive
+       them or accent-tinted bits (subtab pills, links, scrubber) stay pink. */
+    --accent-hover: #f0b3d6 !important;
+    --accent-dim: rgba(228, 154, 198, 0.18) !important;
     --primary-color: #e49ac6 !important;
     --secondary-color: #a893b5 !important;
     --border: rgba(244, 234, 247, 0.05) !important;
@@ -32,6 +37,8 @@ body.app-theme-sweet {
     --text-bright: #333333 !important;
     --text-muted: #998899 !important;
     --accent: #d98fc8 !important;
+    --accent-hover: #e8a8d8 !important;
+    --accent-dim: rgba(217, 143, 200, 0.18) !important;
     --primary-color: #d98fc8 !important;
     --secondary-color: #d8a8d8 !important;
     --border: rgba(220, 150, 200, 0.2) !important;
@@ -41,7 +48,7 @@ body.app-theme-sweet {
     --danger: #d97878 !important;
     /* Light-theme shadows want a soft pink tint, not pure black, so they
        don't read as smudges over a pastel surface. */
-    --shadow-tint: rgba(140, 80, 110, 0.35) !important;
+    --shadow-tint: rgba(140, 80, 110, 0.16) !important;
 }
 
 /* ========== THEME: ECLIPSE HARMONY ========== */
@@ -54,6 +61,8 @@ body.app-theme-eclipse {
     --text-bright: #ffffff !important;
     --text-muted: #9ca3af !important;
     --accent: #536dff !important;
+    --accent-hover: #8b9bff !important;
+    --accent-dim: rgba(83, 109, 255, 0.18) !important;
     --primary-color: #536dff !important;
     --secondary-color: #8b9bff !important;
     --border: rgba(156, 163, 175, 0.1) !important;
@@ -398,4 +407,169 @@ body.app-theme-eclipse::-webkit-scrollbar-track {
 
 body.app-theme-eclipse::-webkit-scrollbar-thumb {
     background: #536dff !important;
+}
+
+/* ============================================================
+   THEME: PRESSED ROSE 🥀  (the in-between; internal id: dusk)
+   The bridge theme — light enough to escape the dark themes,
+   muted enough to escape the bright pink/white. Light-family:
+   dark text on a warm light canvas, warm-tinted shadows.
+   Palette lives in the var block below; --accent drives every
+   selection/border/button/glow (so a swap is one cluster of edits).
+   ============================================================ */
+body.app-theme-dusk {
+    --bg: #a78d76 !important;
+    --bg-hover: #d6c3af !important;
+    --bg-input: #d6c3af !important;
+    --bg-card: #c8b29b !important;
+    --text: #2b2017 !important;
+    --text-bright: #1c140d !important;
+    --text-muted: #5e4d3d !important;
+    --accent: #7A1515 !important;
+    --accent-hover: #9a2222 !important;
+    --accent-dim: rgba(122, 21, 21, 0.10) !important;
+    --primary-color: #7A1515 !important;
+    --secondary-color: #9a2222 !important;
+    --border: rgba(82, 58, 38, 0.30) !important;
+    --bg-secondary: #c8b29b !important;
+    --glow: rgba(122, 21, 21, 0.28) !important;
+    --success: #4f9168 !important;
+    --danger: #c0443a !important;
+    /* Light surface wants a warm brown shadow, not pure black, so it
+       doesn't read as a smudge over the taupe. */
+    --shadow-tint: rgba(95, 65, 40, 0.15) !important;
+}
+
+/* Workspace and Layout - ROOT LEVEL */
+body.app-theme-dusk,
+body.app-theme-dusk .workspace,
+body.app-theme-dusk .library-column,
+body.app-theme-dusk main,
+body.app-theme-dusk section {
+    background: #a78d76 !important;
+}
+
+/* Control Column (Sidebar) */
+body.app-theme-dusk .control-column {
+    background: #a78d76 !important;
+    border-right: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Windows and Panels */
+body.app-theme-dusk .window,
+body.app-theme-dusk .control-window {
+    background: #c8b29b !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Tab Buttons */
+body.app-theme-dusk .tab-btn {
+    background: #c8b29b !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+    color: #2b2017 !important;
+}
+
+body.app-theme-dusk .tab-btn.active {
+    background: rgba(122, 21, 21, 0.10) !important;
+    border: 1px solid #7A1515 !important;
+    color: #2b2017 !important;
+}
+
+/* Main Content Area */
+body.app-theme-dusk .main-content,
+body.app-theme-dusk section {
+    background: #a78d76 !important;
+}
+
+/* Card Sections */
+body.app-theme-dusk .card-section {
+    background: #c8b29b !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Card Headers */
+body.app-theme-dusk .card-header {
+    color: #2b2017 !important;
+}
+
+/* Inputs and Text Fields */
+body.app-theme-dusk input,
+body.app-theme-dusk textarea,
+body.app-theme-dusk select {
+    background: #d6c3af !important;
+    color: #2b2017 !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+body.app-theme-dusk input::placeholder,
+body.app-theme-dusk textarea::placeholder {
+    color: #5e4d3d !important;
+}
+
+/* Detail Panel */
+body.app-theme-dusk .detail-panel {
+    background: #a78d76 !important;
+    border-left: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Library Items - MOST IMPORTANT */
+body.app-theme-dusk .library-item,
+body.app-theme-dusk [class*="item-card"] {
+    background: #c8b29b !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+    color: #2b2017 !important;
+}
+
+body.app-theme-dusk .library-item:hover,
+body.app-theme-dusk [class*="item-card"]:hover {
+    background: #d6c3af !important;
+}
+
+/* Buttons */
+body.app-theme-dusk .btn-primary {
+    background: linear-gradient(135deg, #7A1515 0%, #9a2222 100%) !important;
+    color: #ffffff !important;
+}
+
+body.app-theme-dusk .btn-secondary {
+    background: #c8b29b !important;
+    color: #2b2017 !important;
+    border: 1px solid rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Progress Bars */
+body.app-theme-dusk .progress-bar {
+    background: rgba(82, 58, 38, 0.18) !important;
+}
+
+body.app-theme-dusk .progress-fill {
+    background: linear-gradient(90deg, #7A1515 0%, #9a2222 100%) !important;
+}
+
+/* Status Badges */
+body.app-theme-dusk .status-badge {
+    background: rgba(122, 21, 21, 0.10) !important;
+    color: #9a2222 !important;
+}
+
+/* Scrollbars */
+body.app-theme-dusk::-webkit-scrollbar-track {
+    background: #c8b29b !important;
+}
+
+body.app-theme-dusk::-webkit-scrollbar-thumb {
+    background: #7A1515 !important;
+}
+
+/* Activity drawer: the base uses --bg (the mocha canvas), which reads too
+   dark for this light theme. Lift it to the card surface so it sits above
+   the page; rows (--bg-input, lighter) still stand out. */
+body.app-theme-dusk .activity-drawer {
+    background: #c8b29b !important;
+}
+
+/* Toasts also default to --bg (mocha); lift the brown to the card surface so
+   they read brighter. The accent left-rim is left as-is. */
+body.app-theme-dusk .toast {
+    background: #c8b29b !important;
 }

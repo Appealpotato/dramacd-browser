@@ -345,3 +345,143 @@ body.player-theme-sweet .control-btn:hover {
 body.player-theme-eclipse .control-btn:hover {
     background: #2a3552 !important;
 }
+
+/* ============================================================
+   THEME: PRESSED ROSE 🥀  (the in-between; internal id: dusk) — player colors
+   Warm sandstone-taupe surfaces lit by burnt-sunset orange #7A1515.
+   Light-family: dark espresso text on warm sand. Canvas #a78d76.
+   ============================================================ */
+body.player-theme-dusk {
+    --player-bg-deep: #a78d76 !important;
+    --player-bg-gradient: linear-gradient(135deg, #c8b29b 0%, #a78d76 50%, #9c8368 100%) !important;
+    --player-panel-surface: #c8b29b !important;
+    --player-panel-hover: #d6c3af !important;
+    --player-panel-active: #d6c3af !important;
+    --player-panel-secondary: #c8b29b !important;
+    --player-glow-accent: rgba(122, 21, 21, 0.28) !important;
+    --player-accent-primary: #7A1515 !important;
+    --player-accent-secondary: #9a2222 !important;
+    --player-accent-pink: #7A1515 !important;
+    --player-accent-gradient: linear-gradient(135deg, #7A1515 0%, #9a2222 100%) !important;
+    --player-text-primary: #2b2017 !important;
+    --player-text-secondary: #5e4d3d !important;
+    --player-text-timestamp: #6b5a48 !important;
+    --player-border-soft: rgba(82, 58, 38, 0.30) !important;
+    --player-border-active: #7A1515 !important;
+    --player-progress-track: rgba(82, 58, 38, 0.18) !important;
+}
+
+/* Player Container */
+body.player-theme-dusk .player-container {
+    background: #a78d76 !important;
+    color: #2b2017 !important;
+}
+
+/* Player Header */
+body.player-theme-dusk .player-header {
+    background: #a78d76 !important;
+    border-bottom-color: rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Player Track Title/Info */
+body.player-theme-dusk .player-track-title {
+    color: #2b2017 !important;
+}
+
+/* Player Track Meta */
+body.player-theme-dusk .player-track-meta {
+    color: #5e4d3d !important;
+}
+
+/* Progress Bar */
+body.player-theme-dusk .player-progress-bar {
+    background: rgba(82, 58, 38, 0.18) !important;
+}
+
+body.player-theme-dusk .player-progress-fill {
+    background: linear-gradient(90deg, #7A1515 0%, #9a2222 100%) !important;
+}
+
+/* Control Buttons */
+body.player-theme-dusk .control-btn {
+    background: #c8b29b !important;
+    color: #2b2017 !important;
+    border-color: rgba(82, 58, 38, 0.30) !important;
+}
+
+body.player-theme-dusk .control-btn.play {
+    background: linear-gradient(135deg, #7A1515 0%, #9a2222 100%) !important;
+    color: #ffffff !important;
+}
+
+/* Transcript Segments */
+body.player-theme-dusk .player-transcript-segment {
+    background: #c8b29b !important;
+    border-color: rgba(82, 58, 38, 0.30) !important;
+}
+
+body.player-theme-dusk .player-transcript-segment.active {
+    background: #d6c3af !important;
+    border-color: #7A1515 !important;
+}
+
+/* Segment Timestamp */
+body.player-theme-dusk .segment-timestamp {
+    color: #6b5a48 !important;
+}
+
+/* Transcript Text */
+body.player-theme-dusk .segment-text-original {
+    color: #2b2017 !important;
+}
+
+body.player-theme-dusk .segment-text-translation {
+    color: #5e4d3d !important;
+}
+
+/* Active segment text becomes brighter */
+body.player-theme-dusk .player-transcript-segment.active .segment-text-original {
+    color: #2b2017 !important;
+}
+
+body.player-theme-dusk .player-transcript-segment.active .segment-text-translation {
+    color: #2b2017 !important;
+}
+
+/* Mini Player Bar */
+body.player-theme-dusk .player-mini-bar {
+    background: rgba(200, 178, 155, 0.95) !important;
+    border-top-color: rgba(82, 58, 38, 0.30) !important;
+}
+
+/* Mini Player Title */
+body.player-theme-dusk .mini-player-title {
+    color: #2b2017 !important;
+}
+
+/* Mini Player Buttons */
+body.player-theme-dusk .mini-player-btn {
+    background: linear-gradient(135deg, #7A1515 0%, #9a2222 100%) !important;
+}
+
+/* Mini Player Progress */
+body.player-theme-dusk .mini-player-progress-fill {
+    background: linear-gradient(90deg, #7A1515 0%, #9a2222 100%) !important;
+}
+
+/* Player Time Display */
+body.player-theme-dusk .player-time-display {
+    color: #5e4d3d !important;
+}
+
+/* Button Hover States */
+body.player-theme-dusk .control-btn:hover {
+    background: #d6c3af !important;
+}
+
+/* Transcript line hover: the shared --bg-hover (#d6c3af) is too bright a lift
+   on this light theme — most obvious on the big focal active line. Use a soft
+   translucent warm darken instead so the hover is subtle on every line. */
+body.player-theme-dusk .player-stage-line:hover {
+    background: rgba(74, 50, 30, 0.10) !important;
+}
