@@ -1,4 +1,4 @@
-const { createApp, ref, reactive, computed, onMounted, watch, nextTick } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
 // Filter chip component
 const FilterChip = {
@@ -118,6 +118,7 @@ const app = createApp({
 
         // Activity drawer + toast state (autopilot pipeline monitor)
         const autopilotJobs = ref([]);                  // array, freshly fetched each poll
+        let activityFetchHealthy = true;                // tracks /jobs reachability so we toast once, not every poll
         const autopilotPrevStatuses = new Map();        // job_id -> last seen status (for toast triggers)
         const ACTIVITY_DRAWER_OPEN_KEY = 'dramacd.activityDrawerOpen';
         const activityDrawerOpen = ref(false);
@@ -134,6 +135,7 @@ const app = createApp({
         const autopilotToasts = ref([]);
         let autopilotToastSeq = 0;
         let autopilotPollTimer = null;
+        let opsPanelTimer = null;
         // Item resolution: db.items isn't always in the loaded library cache
         // (e.g. when running pipeline jobs from Workshop) so we fetch missing
         // ones lazily and cache the resolved display title here. Reactive so
@@ -147,24 +149,50 @@ const app = createApp({
         // Persisted to localStorage so a refresh doesn't resurrect rows the
         // user already cleared.
         const DISMISSED_ACTIVITY_KEY = 'dramacd.dismissedActivityJobs';
+        // Dismissed rows auto-expire so a frustrated "dismiss all" in one
+        // session can't permanently hide jobs (the cause of "my Activity is
+        // always empty"). Persisted as { [jobId]: dismissedAtEpochMs }; entries
+        // older than the TTL are pruned on load.
+        const DISMISS_TTL_MS = 24 * 60 * 60 * 1000; // 24h
         const dismissedActivityJobs = ref(new Set());
+        const dismissedAtById = {}; // jobId -> epoch ms, kept in sync with the set
         try {
             const raw = localStorage.getItem(DISMISSED_ACTIVITY_KEY);
             if (raw) {
-                const arr = JSON.parse(raw);
-                if (Array.isArray(arr)) {
-                    dismissedActivityJobs.value = new Set(
-                        arr.map(n => Number(n)).filter(n => Number.isFinite(n))
-                    );
+                const parsed = JSON.parse(raw);
+                const now = Date.now();
+                // The new format is a { id: ts } map. The legacy format was a
+                // bare id array with no timestamps — the source of permanently
+                // hidden rows. We deliberately DON'T import legacy entries:
+                // upgrading clears old dismissals once, so anyone stuck with an
+                // "always empty" Activity gets a clean slate immediately.
+                const entries = Array.isArray(parsed)
+                    ? []
+                    : Object.entries(parsed).map(([k, v]) => [Number(k), Number(v)]);
+                for (const [id, ts] of entries) {
+                    if (!Number.isFinite(id)) continue;
+                    if (Number.isFinite(ts) && (now - ts) < DISMISS_TTL_MS) {
+                        dismissedAtById[id] = ts;
+                        dismissedActivityJobs.value.add(id);
+                    }
                 }
             }
         } catch (_) {
             // localStorage may be disabled (private mode etc.); silently fall
             // back to in-memory state so the drawer still works.
         }
-        watch(dismissedActivityJobs, (val) => {
+        watch(dismissedActivityJobs, () => {
+            // Keep the timestamp map aligned with the id set: stamp newly
+            // dismissed ids with "now", drop ids that are no longer dismissed.
+            const now = Date.now();
+            for (const key of Object.keys(dismissedAtById)) {
+                if (!dismissedActivityJobs.value.has(Number(key))) delete dismissedAtById[key];
+            }
+            for (const id of dismissedActivityJobs.value) {
+                if (!(id in dismissedAtById)) dismissedAtById[id] = now;
+            }
             try {
-                localStorage.setItem(DISMISSED_ACTIVITY_KEY, JSON.stringify(Array.from(val)));
+                localStorage.setItem(DISMISSED_ACTIVITY_KEY, JSON.stringify(dismissedAtById));
             } catch (_) {}
         });
 
@@ -3907,7 +3935,17 @@ const app = createApp({
                 // transcribe, translate). Backend already filters non-pipeline
                 // jobs out for /api/pipeline/jobs.
                 const resp = await fetch('/api/pipeline/jobs?limit=50');
-                if (!resp.ok) return;
+                if (!resp.ok) {
+                    // Don't blank the drawer silently — tell the user once
+                    // (not every 3s poll) that activity couldn't load.
+                    if (activityFetchHealthy) {
+                        activityFetchHealthy = false;
+                        pushAutopilotToast({ kind: 'fail', title: 'Activity unavailable',
+                            body: `Couldn't load jobs (HTTP ${resp.status}). Retrying…`, ttl: 6000 });
+                    }
+                    return;
+                }
+                activityFetchHealthy = true;
                 const data = await resp.json();
                 const all = Array.isArray(data?.jobs) ? data.jobs : [];
                 // Sort: active first (running/queued), then most recent
@@ -3997,6 +4035,11 @@ const app = createApp({
                 }
             } catch (err) {
                 console.warn('Autopilot poll failed:', err);
+                if (activityFetchHealthy) {
+                    activityFetchHealthy = false;
+                    pushAutopilotToast({ kind: 'fail', title: 'Activity unavailable',
+                        body: 'Network error loading jobs. Retrying…', ttl: 6000 });
+                }
             }
         }
 
@@ -9244,6 +9287,10 @@ const app = createApp({
         persistRef('ui.pipelineTrackId', pipelineTrackId, { number: true });
         persistRef('ui.playerItemId', playerItemId, { number: true });
         persistRef('ui.playerTrackId', playerTrackId, { number: true });
+        // Persist the open track's title too so a hard refresh shows it in the
+        // player header immediately, instead of flashing "No track loaded"
+        // while the track's data is re-fetched in the background.
+        persistRef('ui.playerTrackTitle', playerTrackTitle);
         // Collapse / expand state of card sections across the app.
         // Persisted as objects so newly-added sections fall back to the
         // refs' default value rather than being silently absent.
@@ -9330,8 +9377,28 @@ const app = createApp({
                         if (pipelineTrackId.value) {
                             try { await loadPipelineRuns(); } catch (_) {}
                         }
-                    } else if (activeTab.value === 'player' && playerItemId.value && !playerTrackId.value) {
+                    } else if (activeTab.value === 'player' && playerItemId.value) {
+                        // A refresh restored playerItemId/playerTrackId from
+                        // localStorage but not the derived data. Repopulate the
+                        // track list (so the "back" view has real data instead
+                        // of a false "not extracted yet" empty-state), and if a
+                        // track was open, restore the full player so it doesn't
+                        // get stuck on "No track loaded".
                         await loadPlayerItemTracks();
+                        if (playerTrackId.value) {
+                            const savedTrackId = playerTrackId.value;
+                            const known = (playerAvailableTracks.value || [])
+                                .find(t => t.id === savedTrackId);
+                            if (known && known.file_exists !== false) {
+                                await loadPlayerTrack(savedTrackId);
+                            } else {
+                                // The previously-open track is gone (re-scan or
+                                // workspace cleanup) — fall back to the now-
+                                // populated track list rather than a dead player.
+                                playerTrackId.value = null;
+                                playerTrackTitle.value = '';
+                            }
+                        }
                     }
                 } catch (err) {
                     console.warn('UI state rehydration failed:', err);
@@ -9411,11 +9478,20 @@ const app = createApp({
                 pollFetchStatus();
             }
 
-            setInterval(() => {
-                loadOpsPanel();
-            }, 5000);
+            if (!opsPanelTimer) {
+                opsPanelTimer = setInterval(() => {
+                    loadOpsPanel();
+                }, 5000);
+            }
 
 
+        });
+
+        onUnmounted(() => {
+            if (opsPanelTimer) {
+                clearInterval(opsPanelTimer);
+                opsPanelTimer = null;
+            }
         });
 
         // ====== PLAYER FUNCTIONS ======
@@ -9533,8 +9609,8 @@ const app = createApp({
 
         function setPlayerTheme(theme) {
             // Update theme classes on body element (both player and app-wide)
-            document.body.classList.remove('player-theme-starlit', 'player-theme-sweet', 'player-theme-eclipse');
-            document.body.classList.remove('app-theme-starlit', 'app-theme-sweet', 'app-theme-eclipse');
+            document.body.classList.remove('player-theme-starlit', 'player-theme-sweet', 'player-theme-eclipse', 'player-theme-dusk');
+            document.body.classList.remove('app-theme-starlit', 'app-theme-sweet', 'app-theme-eclipse', 'app-theme-dusk');
             document.body.classList.add(`player-theme-${theme}`);
             document.body.classList.add(`app-theme-${theme}`);
 
