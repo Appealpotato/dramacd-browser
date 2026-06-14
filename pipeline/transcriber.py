@@ -242,17 +242,19 @@ class WhisperTranscriber:
         self._load_model()
 
         start_time = time.time()
-        segments = []
-        segment_count = 0
 
-        try:
+        def _attempt(hotwords: str | None) -> dict:
+            """One full decode pass. Factored out so we can transparently retry
+            without hotwords if the prompt overflows the decoder (see below)."""
+            segments: list[dict] = []
+            segment_count = 0
             transcribe_kwargs = dict(
                 language=language,
                 beam_size=self.beam_size,
                 word_timestamps=self.word_timestamps,
                 vad_filter=self.vad_filter,
                 condition_on_previous_text=self.condition_on_previous_text,
-                hotwords=self.hotwords,
+                hotwords=hotwords,
             )
             # Faster Whisper returns a generator of segments with real-time
             # progress; transcribe() returns (segments_generator, info).
@@ -279,12 +281,13 @@ class WhisperTranscriber:
                 f"[FASTER-WHISPER] Audio duration: {info.duration:.1f}s, language: {info.language} "
                 f"(prob: {info.language_probability:.2f}) | model={self.model_name} "
                 f"beam={self.beam_size} vad={self.vad_filter} condition_prev={self.condition_on_previous_text} "
-                f"hotwords={'yes' if self.hotwords else 'no'} "
+                f"hotwords={'yes' if hotwords else 'no'} "
                 f"word_timestamps={self.word_timestamps} "
                 f"batched={self.batch_size if self._uses_batching() else 'no'}"
             )
 
-            # Process segments as they arrive (this is where real-time callbacks happen)
+            # Process segments as they arrive. NOTE: the decoder error we retry
+            # on is raised lazily, during this iteration (not at transcribe()).
             for segment in segments_generator:
                 segment_count += 1
                 seg_dict = {
@@ -313,19 +316,43 @@ class WhisperTranscriber:
 
                 logger.debug(f"[FASTER-WHISPER] Segment {segment_count}: {segment.start:.1f}s-{segment.end:.1f}s: {segment.text[:50]}")
 
+            # Return in OpenAI Whisper format for compatibility
+            return {
+                "text": " ".join(s["text"] for s in segments),
+                "segments": segments,
+                "language": info.language,
+            }
+
+        try:
+            try:
+                result = _attempt(self.hotwords)
+            except ValueError as e:
+                # CTranslate2 raises "The maximum decoding length must be > 0"
+                # when the prompt eats the whole 448-token decode budget. The
+                # carried-over previous text is already truncated by
+                # faster-whisper, so the only unbounded part is our hotwords —
+                # drop them and retry. A track must never hard-fail just because
+                # its name-bias vocabulary (title + glossary) was long.
+                if self.hotwords and "maximum decoding length" in str(e).lower():
+                    logger.warning(
+                        f"[FASTER-WHISPER] Prompt overflow with hotwords "
+                        f"({len(self.hotwords)} chars) — retrying without hotwords: {e}"
+                    )
+                    result = _attempt(None)
+                else:
+                    raise
+
             elapsed = time.time() - start_time
-            logger.info(f"[FASTER-WHISPER] Transcription complete in {elapsed:.1f}s: {segment_count} segments")
+            logger.info(
+                f"[FASTER-WHISPER] Transcription complete in {elapsed:.1f}s: "
+                f"{len(result['segments'])} segments"
+            )
 
             # Call final progress callback
             if self.progress_callback:
                 self.progress_callback(100)
 
-            # Return in OpenAI Whisper format for compatibility
-            return {
-                "text": " ".join(s["text"] for s in segments),
-                "segments": segments,
-                "language": info.language
-            }
+            return result
 
         except Exception as e:
             logger.error(f"[FASTER-WHISPER] Transcription failed: {e}")

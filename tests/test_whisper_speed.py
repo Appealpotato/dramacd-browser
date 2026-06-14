@@ -91,5 +91,87 @@ class ModelCacheTests(unittest.TestCase):
         self.assertTrue(hasattr(t, "_model_cache_lock"))
 
 
+class _Info:
+    duration = 10.0
+    language = "ja"
+    language_probability = 0.99
+
+
+class _Seg:
+    def __init__(self, text="ok"):
+        self.id = 0
+        self.start = 0.0
+        self.end = 1.0
+        self.text = text
+        self.words = None
+
+
+class _FakeModel:
+    """Stand-in for WhisperModel: records the hotwords each transcribe() got,
+    and (optionally) raises the decoder's overflow ValueError when hotwords
+    are present — lazily, during generator iteration, like the real engine."""
+
+    def __init__(self, fail_with_hotwords=True, always_fail=False,
+                 fail_message="The maximum decoding length must be > 0"):
+        self.calls = []
+        self._fail_with_hotwords = fail_with_hotwords
+        self._always_fail = always_fail
+        self._fail_message = fail_message
+
+    def transcribe(self, path, **kwargs):
+        hotwords = kwargs.get("hotwords")
+        self.calls.append(hotwords)
+        msg = self._fail_message
+
+        def gen_fail():
+            raise ValueError(msg)
+            yield  # pragma: no cover - makes this a generator
+
+        def gen_ok():
+            yield _Seg("ok")
+
+        if self._always_fail or (hotwords and self._fail_with_hotwords):
+            return gen_fail(), _Info()
+        return gen_ok(), _Info()
+
+
+class HotwordsOverflowRetryTests(unittest.TestCase):
+    def _transcriber(self, fake, hotwords="x" * 200):
+        t = WhisperTranscriber(hotwords=hotwords)
+        t._model = fake  # bypass real model load (_load_model no-ops when set)
+        return t
+
+    def test_retries_without_hotwords_on_overflow(self):
+        fake = _FakeModel(fail_with_hotwords=True)
+        t = self._transcriber(fake)
+        result = t._transcribe_with_progress("dummy.wav")
+        # First attempt carried hotwords; second dropped them and succeeded.
+        self.assertEqual(fake.calls, ["x" * 200, None])
+        self.assertEqual(len(result["segments"]), 1)
+        self.assertEqual(result["segments"][0]["text"], "ok")
+
+    def test_no_retry_when_hotwords_absent(self):
+        # Overflow error but no hotwords to drop → propagate, don't loop.
+        fake = _FakeModel(always_fail=True)
+        t = self._transcriber(fake, hotwords=None)
+        with self.assertRaises(ValueError):
+            t._transcribe_with_progress("dummy.wav")
+        self.assertEqual(fake.calls, [None])  # exactly one attempt
+
+    def test_unrelated_value_error_not_retried(self):
+        fake = _FakeModel(fail_with_hotwords=True, fail_message="some other problem")
+        t = self._transcriber(fake)
+        with self.assertRaises(ValueError):
+            t._transcribe_with_progress("dummy.wav")
+        self.assertEqual(fake.calls, ["x" * 200])  # no retry on unrelated error
+
+    def test_success_path_keeps_hotwords(self):
+        fake = _FakeModel(fail_with_hotwords=False)
+        t = self._transcriber(fake)
+        result = t._transcribe_with_progress("dummy.wav")
+        self.assertEqual(fake.calls, ["x" * 200])  # one attempt, no retry
+        self.assertEqual(len(result["segments"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

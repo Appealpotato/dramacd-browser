@@ -12,9 +12,15 @@ from pipeline.transcriber import WhisperTranscriber
 # VRAM and slows everything. Runtime-tunable (Settings → Concurrency); default 1.
 _whisper_semaphore = DynamicSemaphore(db.get_runtime_max_whisper_jobs, name="Whisper", default=1)
 
-# hotwords are resent with every ~30s decoding window — keep the bias text
-# short so it doesn't crowd out the window's own prompt budget.
-_HOTWORDS_MAX_CHARS = 300
+# hotwords are resent with every ~30s decoding window and are NOT truncated by
+# faster-whisper, so they compete with carried-over context for the decoder's
+# fixed 448-token prompt budget. For Japanese (~1.5-2 tokens/char) an overlong
+# bias string can eat the entire budget and crash the decode with "maximum
+# decoding length must be > 0". Keep it well under that — the most important
+# terms (title, series, then top glossary readings) come first, so truncation
+# drops the least-important tail. (A retry-without-hotwords in the transcriber
+# is the backstop if this ever still overflows.)
+_HOTWORDS_MAX_CHARS = 128
 
 
 def _build_hotwords(item: dict, glossary: str = "") -> str | None:
