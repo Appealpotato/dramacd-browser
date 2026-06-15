@@ -181,10 +181,27 @@ scan_state = {
     "finished_at": None,
 }
 
+_scan_state_lock = threading.RLock()
 _scan_pause_event = threading.Event()
 _scan_stop_event = threading.Event()
 _fetch_pause_event = threading.Event()
 _fetch_stop_event = threading.Event()
+
+
+def _scan_state_snapshot() -> dict:
+    with _scan_state_lock:
+        return dict(scan_state)
+
+
+def _scan_state_get(key: str, default=None):
+    with _scan_state_lock:
+        return scan_state.get(key, default)
+
+
+def _scan_state_update(**fields) -> dict:
+    with _scan_state_lock:
+        scan_state.update(fields)
+        return dict(scan_state)
 
 
 async def _safe_latest_job(job_type: str) -> dict | None:
@@ -271,23 +288,19 @@ def _fetch_state_from_job(job: dict | None) -> dict:
 
 
 async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
-    global scan_state
-
-    scan_state.update(
-        {
-            "running": True,
-            "paused": False,
-            "stopping": False,
-            "result": None,
-            "error": None,
-            "current": None,
-            "total_files": 0,
-            "processed_files": 0,
-            "matched": 0,
-            "unmatched": 0,
-            "started_at": _now_iso(),
-            "finished_at": None,
-        }
+    _scan_state_update(
+        running=True,
+        paused=False,
+        stopping=False,
+        result=None,
+        error=None,
+        current=None,
+        total_files=0,
+        processed_files=0,
+        matched=0,
+        unmatched=0,
+        started_at=_now_iso(),
+        finished_at=None,
     )
     _scan_pause_event.clear()
     _scan_stop_event.clear()
@@ -296,7 +309,7 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         job_id = await db.create_job("scan", status="running", metadata={"paths": scan_paths, "recursive": recursive})
     except Exception:
         job_id = None
-    scan_state["job_id"] = job_id
+    _scan_state_update(job_id=job_id)
     if job_id:
         await db.append_job_event(job_id, "info", "Scan started", {"paths": scan_paths, "recursive": recursive})
     _log_job_event("scan", "started", job_id=job_id, paths=scan_paths, recursive=recursive)
@@ -318,11 +331,13 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         loop = asyncio.get_running_loop()
 
         def on_progress(progress: dict):
-            scan_state["current"] = progress.get("current")
-            scan_state["total_files"] = progress.get("total_files", 0)
-            scan_state["processed_files"] = progress.get("processed_files", 0)
-            scan_state["matched"] = progress.get("matched", 0)
-            scan_state["unmatched"] = progress.get("unmatched", 0)
+            snapshot = _scan_state_update(
+                current=progress.get("current"),
+                total_files=progress.get("total_files", 0),
+                processed_files=progress.get("processed_files", 0),
+                matched=progress.get("matched", 0),
+                unmatched=progress.get("unmatched", 0),
+            )
 
             nonlocal last_scan_update
             now = datetime.utcnow().timestamp()
@@ -335,13 +350,13 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                     db.update_job(
                         job_id,
                         status="running",
-                        paused=1 if scan_state["paused"] else 0,
-                        stopping=1 if scan_state["stopping"] else 0,
-                        current=scan_state["current"],
-                        total_files=scan_state["total_files"],
-                        processed_files=scan_state["processed_files"],
-                        matched=scan_state["matched"],
-                        unmatched=scan_state["unmatched"],
+                        paused=1 if snapshot["paused"] else 0,
+                        stopping=1 if snapshot["stopping"] else 0,
+                        current=snapshot["current"],
+                        total_files=snapshot["total_files"],
+                        processed_files=snapshot["processed_files"],
+                        matched=snapshot["matched"],
+                        unmatched=snapshot["unmatched"],
                     )
                 )
 
@@ -537,11 +552,13 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
         result["stats"]["loose_archives_imported"] = loose_imported
 
         stats = result["stats"]
-        scan_state["result"] = stats
-        scan_state["total_files"] = stats.get("total_files", 0)
-        scan_state["processed_files"] = stats.get("processed_files", 0)
-        scan_state["matched"] = stats.get("matched", 0)
-        scan_state["unmatched"] = stats.get("unmatched", 0)
+        snapshot = _scan_state_update(
+            result=stats,
+            total_files=stats.get("total_files", 0),
+            processed_files=stats.get("processed_files", 0),
+            matched=stats.get("matched", 0),
+            unmatched=stats.get("unmatched", 0),
+        )
         logger.info(f"Scan complete: {stats}")
         if job_id:
             await db.update_job(
@@ -551,10 +568,10 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                 stopping=0,
                 stopped=1 if stats.get("stopped") else 0,
                 current=None,
-                total_files=scan_state["total_files"],
-                processed_files=scan_state["processed_files"],
-                matched=scan_state["matched"],
-                unmatched=scan_state["unmatched"],
+                total_files=snapshot["total_files"],
+                processed_files=snapshot["processed_files"],
+                matched=snapshot["matched"],
+                unmatched=snapshot["unmatched"],
                 result_json=stats,
                 finished_at=_now_iso(),
             )
@@ -563,15 +580,15 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
             "scan",
             "completed",
             job_id=job_id,
-            total_files=scan_state["total_files"],
-            processed_files=scan_state["processed_files"],
-            matched=scan_state["matched"],
-            unmatched=scan_state["unmatched"],
+            total_files=snapshot["total_files"],
+            processed_files=snapshot["processed_files"],
+            matched=snapshot["matched"],
+            unmatched=snapshot["unmatched"],
             stopped=bool(stats.get("stopped")),
         )
 
     except Exception as e:
-        scan_state["error"] = str(e)
+        snapshot = _scan_state_update(error=str(e))
         logger.error(f"Scan failed: {e}")
         if job_id:
             await db.update_job(
@@ -582,27 +599,29 @@ async def run_scan(scan_paths: list[str] | None = None, recursive: bool = True):
                 stopped=1,
                 error=str(e),
                 current=None,
-                total_files=scan_state["total_files"],
-                processed_files=scan_state["processed_files"],
-                matched=scan_state["matched"],
-                unmatched=scan_state["unmatched"],
+                total_files=snapshot["total_files"],
+                processed_files=snapshot["processed_files"],
+                matched=snapshot["matched"],
+                unmatched=snapshot["unmatched"],
                 finished_at=_now_iso(),
             )
             await db.append_job_event(job_id, "error", "Scan failed", {"error": str(e)})
         _log_job_event("scan", "failed", job_id=job_id, error=str(e))
     finally:
-        scan_state["running"] = False
-        scan_state["paused"] = False
-        scan_state["stopping"] = False
-        scan_state["current"] = None
-        scan_state["finished_at"] = _now_iso()
+        _scan_state_update(
+            running=False,
+            paused=False,
+            stopping=False,
+            current=None,
+            finished_at=_now_iso(),
+        )
         _scan_pause_event.clear()
         _scan_stop_event.clear()
 
 
 @router.post("/scan")
 async def trigger_scan(request: ScanRequest, background_tasks: BackgroundTasks, _auth=Depends(require_api_key)):
-    if scan_state["running"]:
+    if _scan_state_get("running"):
         return {"status": "already_running"}
 
     scan_paths = request.paths or ([request.path] if request.path else None)
@@ -615,7 +634,7 @@ async def get_scan_status():
     latest = await _safe_latest_job("scan")
     state = _scan_state_from_job(latest)
     if not latest:
-        state = dict(scan_state)
+        state = _scan_state_snapshot()
         state.setdefault("status", "running" if state.get("running") else "idle")
         state.setdefault("job_id", state.get("job_id"))
         state["recent_events"] = []
@@ -629,41 +648,40 @@ async def get_scan_status():
 
 @router.post("/scan/pause")
 async def pause_scan(_auth=Depends(require_api_key)):
-    if not scan_state["running"]:
+    if not _scan_state_get("running"):
         return {"status": "idle"}
     _scan_pause_event.set()
-    scan_state["paused"] = True
-    _log_job_event("scan", "pause_requested", job_id=scan_state.get("job_id"))
-    if scan_state.get("job_id"):
-        await db.append_job_event(scan_state["job_id"], "info", "Pause requested")
+    state = _scan_state_update(paused=True)
+    _log_job_event("scan", "pause_requested", job_id=state.get("job_id"))
+    if state.get("job_id"):
+        await db.append_job_event(state["job_id"], "info", "Pause requested")
     await _safe_update_latest_job("scan", {"running"}, status="paused", paused=1, stopping=0)
     return {"status": "paused"}
 
 
 @router.post("/scan/resume")
 async def resume_scan(_auth=Depends(require_api_key)):
-    if not scan_state["running"]:
+    if not _scan_state_get("running"):
         return {"status": "idle"}
     _scan_pause_event.clear()
-    scan_state["paused"] = False
-    _log_job_event("scan", "resume_requested", job_id=scan_state.get("job_id"))
-    if scan_state.get("job_id"):
-        await db.append_job_event(scan_state["job_id"], "info", "Resume requested")
+    state = _scan_state_update(paused=False)
+    _log_job_event("scan", "resume_requested", job_id=state.get("job_id"))
+    if state.get("job_id"):
+        await db.append_job_event(state["job_id"], "info", "Resume requested")
     await _safe_update_latest_job("scan", {"running", "paused"}, status="running", paused=0, stopping=0)
     return {"status": "resumed"}
 
 
 @router.post("/scan/stop")
 async def stop_scan(_auth=Depends(require_api_key)):
-    if not scan_state["running"]:
+    if not _scan_state_get("running"):
         return {"status": "idle"}
-    scan_state["stopping"] = True
-    scan_state["paused"] = False
+    state = _scan_state_update(stopping=True, paused=False)
     _scan_pause_event.clear()
     _scan_stop_event.set()
-    _log_job_event("scan", "stop_requested", job_id=scan_state.get("job_id"))
-    if scan_state.get("job_id"):
-        await db.append_job_event(scan_state["job_id"], "info", "Stop requested")
+    _log_job_event("scan", "stop_requested", job_id=state.get("job_id"))
+    if state.get("job_id"):
+        await db.append_job_event(state["job_id"], "info", "Stop requested")
     await _safe_update_latest_job("scan", {"running", "paused", "stopping"}, status="stopping", paused=0, stopping=1)
     return {"status": "stopping"}
 

@@ -92,6 +92,26 @@ class PipelineApiTests(unittest.TestCase):
         self.assertEqual(resp.json()["status"], "queued")
         self.assertEqual(resp.json()["job"]["id"], 5)
 
+    def test_archive_thumb_rejects_traversal_path(self):
+        with patch.object(pipeline_router.db, "get_item", AsyncMock(return_value={"id": 12})):
+            with TestClient(self.app) as client:
+                resp = client.get("/api/pipeline/items/12/archive-thumb?path=../cover.jpg")
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["detail"], "Invalid archive member path")
+
+    def test_archive_thumb_requires_listed_archive_member(self):
+        with patch.object(pipeline_router.db, "get_item", AsyncMock(return_value={"id": 12})), \
+             patch.object(pipeline_router.db, "get_scan_paths", AsyncMock(return_value=["X:/CDs"])), \
+             patch.object(pipeline_router, "_resolve_archives_for_item", return_value=[pipeline_router.Path("fake.zip")]), \
+             patch.object(pipeline_router, "list_archive_contents", return_value=[{"path": "images/cover.jpg", "size": 10}]), \
+             patch.object(pipeline_router, "stream_archive_file") as mock_stream:
+            with TestClient(self.app) as client:
+                resp = client.get("/api/pipeline/items/12/archive-thumb?path=secret.jpg")
+
+        self.assertEqual(resp.status_code, 404)
+        mock_stream.assert_not_called()
+
     def test_create_and_list_transcript_runs(self):
         created_run = {"id": 91, "track_id": 7, "language": "ja"}
         with patch.object(pipeline_router.db, "get_pipeline_track", AsyncMock(return_value={"id": 7})), \

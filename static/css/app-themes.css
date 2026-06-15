@@ -9,6 +9,11 @@ body.app-theme-starlit {
     --bg-hover: rgba(255, 255, 255, 0.08) !important;
     --bg-input: #262033 !important;
     --bg-card: rgba(255, 255, 255, 0.03) !important;
+    /* Modals/popovers (.meta-preview-panel, gallery) float over a dimmed
+       backdrop, so they need an OPAQUE surface — the translucent --bg-card
+       would let the backdrop bleed through. Without this they fall back to
+       the base :root plum (#262030). */
+    --bg-modal: #262033 !important;
     --text: #f4eaf7 !important;
     --text-bright: #ffffff !important;
     --text-muted: #a893b5 !important;
@@ -33,6 +38,9 @@ body.app-theme-sweet {
     --bg-hover: rgba(255, 235, 245, 0.85) !important;
     --bg-input: #ffe8f5 !important;
     --bg-card: rgba(255, 245, 250, 0.65) !important;
+    /* Opaque elevated pink for modals/popovers — otherwise they inherit the
+       base :root plum (#262030) and read as a dark blob on the pastel theme. */
+    --bg-modal: #ffeef7 !important;
     --text: #664466 !important;
     --text-bright: #333333 !important;
     --text-muted: #998899 !important;
@@ -57,6 +65,9 @@ body.app-theme-eclipse {
     --bg-hover: #1a2535 !important;
     --bg-input: #1a212d !important;
     --bg-card: #1a212d !important;
+    /* Match the opaque card/window surface so modals don't fall back to the
+       base :root plum (#262030), which clashes with the blue palette. */
+    --bg-modal: #1a212d !important;
     --text: #e9eaef !important;
     --text-bright: #ffffff !important;
     --text-muted: #9ca3af !important;
@@ -422,6 +433,10 @@ body.app-theme-dusk {
     --bg-hover: #d6c3af !important;
     --bg-input: #d6c3af !important;
     --bg-card: #c8b29b !important;
+    /* The reported bug: .meta-preview-panel (store-fetch preview + cover
+       gallery) was falling back to the base :root plum (#262030). Match the
+       opaque card/window surface so it reads as a warm taupe panel. */
+    --bg-modal: #c8b29b !important;
     --text: #2b2017 !important;
     --text-bright: #1c140d !important;
     --text-muted: #5e4d3d !important;

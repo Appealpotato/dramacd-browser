@@ -19,6 +19,8 @@ Local browser for drama CD archives with DLsite metadata, on-device transcriptio
 
 ## Run
 
+For the normal Windows path, double-click `install.bat`, then `start.bat`.
+
 ```bash
 pip install -r requirements.txt
 python main.py
@@ -40,6 +42,8 @@ Pipeline features (extraction, transcription, translation, player) are gated beh
 | Variable | Default | Purpose |
 |---|---|---|
 | `DRAMACD_PORT` | `8080` | web server port |
+| `DRAMACD_BIND_ALL` | `1` | LAN-accessible by default; set `0` to restrict to localhost |
+| `DRAMACD_HOST` | — | explicit host override; normally leave unset |
 | `DRAMACD_SCAN_PATH` | `G:\DramaCD\DL` | fallback default scan path on first run |
 | `DRAMACD_API_KEY` | — | optional API key for mutating endpoints |
 | `DRAMACD_ENABLE_PIPELINE` | `0` | start with pipeline features enabled |
@@ -64,7 +68,7 @@ The **OpenAI-compatible provider** has two request-format sub-modes:
 - `openai` — standard `POST {base}/chat/completions`
 - `anthropic` — `POST {base}/messages` with `x-api-key` header. Use this for Claude reverse proxies (matches SillyTavern's "Claude reverse proxy" contract). Prompt caching is wired up automatically — up to 4 cache breakpoints per request.
 
-API keys can be sent via header (`X-API-Key`) or query (`?api_key=`).
+API keys can be sent via header (`X-API-Key`) or query (`?api_key=`). The server binds to all interfaces (LAN) by default so other devices on your network can reach it; set `DRAMACD_BIND_ALL=0` to restrict it to localhost. GET endpoints are unauthenticated, so don't expose this app directly to the internet.
 
 ## API surface
 

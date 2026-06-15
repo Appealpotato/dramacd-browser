@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -35,6 +36,41 @@ class ApiKeySecurityTests(unittest.TestCase):
 
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json(), payload)
+
+
+class CoverUrlSecurityTests(unittest.TestCase):
+    def test_cover_url_requires_https(self):
+        with self.assertRaises(ValueError):
+            asyncio.run(api_router._validate_public_https_url("http://example.com/cover.jpg"))
+
+    def test_cover_url_rejects_private_resolved_ips(self):
+        fake_info = [
+            (
+                api_router.socket.AF_INET,
+                api_router.socket.SOCK_STREAM,
+                6,
+                "",
+                ("127.0.0.1", 443),
+            )
+        ]
+        with patch.object(api_router.socket, "getaddrinfo", return_value=fake_info):
+            with self.assertRaises(ValueError):
+                asyncio.run(api_router._validate_public_https_url("https://example.com/cover.jpg"))
+
+    def test_cover_url_allows_public_https_hosts(self):
+        fake_info = [
+            (
+                api_router.socket.AF_INET,
+                api_router.socket.SOCK_STREAM,
+                6,
+                "",
+                ("93.184.216.34", 443),
+            )
+        ]
+        with patch.object(api_router.socket, "getaddrinfo", return_value=fake_info):
+            url = asyncio.run(api_router._validate_public_https_url("https://example.com/cover.jpg"))
+
+        self.assertEqual(url, "https://example.com/cover.jpg")
 
 
 class DiagnosticsStatusTests(unittest.TestCase):
