@@ -2317,6 +2317,34 @@ async def set_item_manual_track_count_endpoint(item_id: int, payload: dict, _aut
     return {"item_id": item_id, "manual_track_count": count}
 
 
+# NOTE: this literal-path route MUST be defined before the parametrized
+# "/items/{item_id}/translate-metadata" route below. FastAPI matches in
+# definition order, so if the {item_id} route came first it would capture
+# "/items/bulk/translate-metadata" and try to parse "bulk" as an int (422).
+@router.post("/items/bulk/translate-metadata")
+async def bulk_translate_metadata(
+    request: BulkIdsRequest,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(require_api_key),
+):
+    """Queue ONE background job that translates metadata for every given item.
+    Unlike the old per-item loop in the frontend, this shows up in the
+    Activity drawer with live per-item progress."""
+    item_ids = sorted({int(i) for i in (request.item_ids or []) if int(i) > 0})
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="item_ids must be non-empty")
+    job_id = await db.create_job(
+        "pipeline_metadata_translate",
+        status="queued",
+        metadata={"item_ids": item_ids, "queued_at": datetime.now().isoformat()},
+    )
+    await db.append_job_event(
+        job_id, "info", "Metadata translation queued", {"item_count": len(item_ids)}
+    )
+    background_tasks.add_task(_run_bulk_metadata_translation, job_id)
+    return {"status": "queued", "job_id": job_id, "item_count": len(item_ids)}
+
+
 @router.post("/items/{item_id}/translate-metadata")
 async def translate_item_metadata_endpoint(item_id: int, _auth=Depends(require_api_key)):
     """Synchronous single-item metadata translation, wrapped in a job row so
@@ -2540,30 +2568,6 @@ async def _run_bulk_metadata_translation(job_id: int):
         error=(f"{failed}/{len(item_ids)} item(s) failed" if failed else None),
     )
     await db.append_job_event(job_id, "info", "Metadata translation finished", summary)
-
-
-@router.post("/items/bulk/translate-metadata")
-async def bulk_translate_metadata(
-    request: BulkIdsRequest,
-    background_tasks: BackgroundTasks,
-    _auth=Depends(require_api_key),
-):
-    """Queue ONE background job that translates metadata for every given item.
-    Unlike the old per-item loop in the frontend, this shows up in the
-    Activity drawer with live per-item progress."""
-    item_ids = sorted({int(i) for i in (request.item_ids or []) if int(i) > 0})
-    if not item_ids:
-        raise HTTPException(status_code=400, detail="item_ids must be non-empty")
-    job_id = await db.create_job(
-        "pipeline_metadata_translate",
-        status="queued",
-        metadata={"item_ids": item_ids, "queued_at": datetime.now().isoformat()},
-    )
-    await db.append_job_event(
-        job_id, "info", "Metadata translation queued", {"item_count": len(item_ids)}
-    )
-    background_tasks.add_task(_run_bulk_metadata_translation, job_id)
-    return {"status": "queued", "job_id": job_id, "item_count": len(item_ids)}
 
 
 @router.put("/items/{item_id}/cover")

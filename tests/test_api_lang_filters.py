@@ -291,6 +291,42 @@ class ApiMetadataTranslationTests(unittest.TestCase):
         self.assertTrue(payload.get("fallback_used"))
         self.assertEqual(payload.get("provider_used"), "openrouter")
 
+    def test_bulk_translate_metadata_routes_to_bulk_handler(self):
+        # Regression guard: the literal "/items/bulk/translate-metadata" route
+        # MUST be registered before the parametrized
+        # "/items/{item_id}/translate-metadata" route. If the order is ever
+        # flipped, FastAPI matches "bulk" as item_id and returns a 422
+        # int_parsing error instead of queuing the bulk job.
+        with patch.object(api_router.db, "create_job", AsyncMock(return_value=99)), \
+             patch.object(api_router.db, "append_job_event", AsyncMock(return_value=None)), \
+             patch.object(api_router, "_run_bulk_metadata_translation", AsyncMock(return_value=None)):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/items/bulk/translate-metadata",
+                    json={"item_ids": [1, 2]},
+                )
+
+        # The whole point: "bulk" must not be parsed as item_id.
+        self.assertNotEqual(resp.status_code, 422, resp.text)
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.json()
+        self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["job_id"], 99)
+        self.assertEqual(payload["item_count"], 2)
+
+    def test_bulk_translate_metadata_rejects_empty_ids(self):
+        with patch.object(api_router.db, "create_job", AsyncMock(return_value=99)), \
+             patch.object(api_router.db, "append_job_event", AsyncMock(return_value=None)), \
+             patch.object(api_router, "_run_bulk_metadata_translation", AsyncMock(return_value=None)):
+            with TestClient(self.app) as client:
+                resp = client.post(
+                    "/api/items/bulk/translate-metadata",
+                    json={"item_ids": []},
+                )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn("item_ids", resp.json()["detail"])
+
 
 class ApiSettingsTests(unittest.TestCase):
     def setUp(self):
