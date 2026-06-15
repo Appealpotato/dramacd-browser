@@ -28,9 +28,11 @@ APP_DIR = Path(__file__).parent
 SCAN_PATH = os.environ.get("DRAMACD_SCAN_PATH", "").strip()
 
 # Server settings
-# Local-only by default. Set DRAMACD_BIND_ALL=1 to expose the app on the LAN.
+# LAN-accessible by default — this is a personal local app, so other devices
+# on your network (phone, tablet) can reach it out of the box. Set
+# DRAMACD_BIND_ALL=0 (or DRAMACD_HOST=127.0.0.1) to restrict it to localhost.
 HOST = os.environ.get("DRAMACD_HOST", "").strip() or (
-    "0.0.0.0" if _env_bool("DRAMACD_BIND_ALL", default=False) else "127.0.0.1"
+    "0.0.0.0" if _env_bool("DRAMACD_BIND_ALL", default=True) else "127.0.0.1"
 )
 PORT = int(os.environ.get("DRAMACD_PORT", "8080"))
 API_KEY = os.environ.get("DRAMACD_API_KEY", "").strip() or None

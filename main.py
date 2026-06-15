@@ -119,7 +119,10 @@ if __name__ == "__main__":
     print("  DramaCD Library Browser")
     print("=" * 60)
     print(f"  Local:   http://localhost:{PORT}")
-    print(f"  Network: http://{local_ip}:{PORT}")
+    if HOST in {"0.0.0.0", "::"}:
+        print(f"  Network: http://{local_ip}:{PORT}")
+    else:
+        print("  Network: local-only (set DRAMACD_BIND_ALL=1 to expose on LAN)")
     print()
     print("  Open the above URL in your browser.")
     print("  Other devices on your network can use the Network URL.")
