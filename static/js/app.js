@@ -250,6 +250,106 @@ const app = createApp({
         const fetchProgress = reactive({ total: 0, completed: 0, current: null, paused: false, stopping: false, stopped: false });
         const lastFetchSummary = ref(null);
 
+        // --- Draggable scan/fetch progress widget ---------------------------
+        // The overlay can be dragged anywhere; its position persists across
+        // browser refreshes (localStorage) but is reset whenever the app is
+        // restarted (the stored position is tagged with the server boot id, so
+        // a fresh boot id discards it). null position => default CSS corner.
+        const PROGRESS_OVERLAY_POS_KEY = 'progressOverlayPos';
+        const serverBootId = ref(null);
+        let _savedOverlayBootId = null;
+        const progressOverlayPos = ref(null);
+        const progressOverlayStyle = computed(() => {
+            const p = progressOverlayPos.value;
+            if (!p) return {};
+            // Override the default bottom/right anchoring with explicit coords.
+            return { left: p.left + 'px', top: p.top + 'px', right: 'auto', bottom: 'auto' };
+        });
+        function _clampOverlayPos(left, top, w, h) {
+            const maxLeft = Math.max(0, window.innerWidth - w);
+            const maxTop = Math.max(0, window.innerHeight - h);
+            return {
+                left: Math.max(0, Math.min(left, maxLeft)),
+                top: Math.max(0, Math.min(top, maxTop)),
+            };
+        }
+        function persistProgressOverlayPos() {
+            try {
+                if (progressOverlayPos.value) {
+                    localStorage.setItem(PROGRESS_OVERLAY_POS_KEY, JSON.stringify({
+                        bootId: serverBootId.value,
+                        left: progressOverlayPos.value.left,
+                        top: progressOverlayPos.value.top,
+                    }));
+                }
+            } catch (e) { /* storage unavailable — position just won't persist */ }
+        }
+        let _overlayDrag = null;
+        function progressOverlayDragStart(ev) {
+            // Don't start a drag from an interactive control (Pause/Resume/Stop).
+            if (ev.target.closest && ev.target.closest('button, a, input, select, textarea')) return;
+            const el = ev.currentTarget;
+            const rect = el.getBoundingClientRect();
+            _overlayDrag = {
+                offsetX: ev.clientX - rect.left,
+                offsetY: ev.clientY - rect.top,
+                width: rect.width,
+                height: rect.height,
+            };
+            // Pin to the current on-screen position so the first move doesn't jump.
+            progressOverlayPos.value = { left: rect.left, top: rect.top };
+            window.addEventListener('pointermove', progressOverlayDragMove);
+            window.addEventListener('pointerup', progressOverlayDragEnd);
+            ev.preventDefault();
+        }
+        function progressOverlayDragMove(ev) {
+            if (!_overlayDrag) return;
+            progressOverlayPos.value = _clampOverlayPos(
+                ev.clientX - _overlayDrag.offsetX,
+                ev.clientY - _overlayDrag.offsetY,
+                _overlayDrag.width,
+                _overlayDrag.height,
+            );
+        }
+        function progressOverlayDragEnd() {
+            _overlayDrag = null;
+            window.removeEventListener('pointermove', progressOverlayDragMove);
+            window.removeEventListener('pointerup', progressOverlayDragEnd);
+            persistProgressOverlayPos();
+        }
+        function restoreProgressOverlayPos() {
+            // Optimistically restore the saved position now (avoids a flicker on
+            // refresh); the boot-id check in loadServerStatus() resets it later
+            // if the app has since restarted.
+            try {
+                const raw = localStorage.getItem(PROGRESS_OVERLAY_POS_KEY);
+                if (!raw) return;
+                const saved = JSON.parse(raw);
+                if (Number.isFinite(saved.left) && Number.isFinite(saved.top)) {
+                    _savedOverlayBootId = saved.bootId || null;
+                    // Clamp against the current viewport in case the window
+                    // shrank since the position was saved (~300x120 = the
+                    // widget's min footprint).
+                    progressOverlayPos.value = _clampOverlayPos(saved.left, saved.top, 300, 120);
+                }
+            } catch (e) { /* ignore malformed/blocked storage */ }
+        }
+        async function loadServerStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                if (!resp.ok) return;
+                const data = await resp.json();
+                serverBootId.value = data.boot_id || null;
+                // The saved position belongs to a previous server process —
+                // reset to the default corner so a "lost" widget recovers on
+                // restart.
+                if (progressOverlayPos.value && _savedOverlayBootId !== serverBootId.value) {
+                    progressOverlayPos.value = null;
+                    try { localStorage.removeItem(PROGRESS_OVERLAY_POS_KEY); } catch (e) {}
+                }
+            } catch (e) { /* offline / server down — keep optimistic position */ }
+        }
+
         // Scan path settings
         const showScanPathsPanel = ref(false);
         const scanPaths = ref([]);
@@ -2949,6 +3049,7 @@ const app = createApp({
             fanza: 'FANZA Doujin', melon: 'Melonbooks',
             digiket: 'DiGiket', gyutto: 'Gyutto', hvdb: 'HVDB',
             wayback: 'Wayback DLsite', pokedora: 'Pokedora',
+            candybibinba: 'CAnDY BIBInBA',
         };
         function metaSourceLabel(name) {
             return META_SOURCE_LABELS[name] || name || '?';
@@ -5467,6 +5568,29 @@ const app = createApp({
         // long-form Package & Workspace card is still around for power users,
         // but the common cases are one-click via these presets.
         const archiveExportMenuOpen = ref(false);
+        // top/right (px) for the body-anchored fixed dropdown, computed from
+        // the trigger button's rect so the popup escapes the Archive panel's
+        // overflow clipping (same approach as the play-status dropdowns).
+        const archiveExportMenuRect = ref(null);
+        function openArchiveExportMenu(ev) {
+            // Toggle: a second click on the kebab closes it. @mousedown.stop on
+            // the trigger keeps the v-click-outside handler from racing this.
+            if (archiveExportMenuOpen.value) {
+                archiveExportMenuOpen.value = false;
+                return;
+            }
+            const btn = ev && ev.currentTarget;
+            if (btn && btn.getBoundingClientRect) {
+                const r = btn.getBoundingClientRect();
+                archiveExportMenuRect.value = {
+                    top: r.bottom + 4,
+                    // right-align the dropdown's right edge to the button's,
+                    // matching the original `right: 0` anchoring.
+                    right: Math.max(8, window.innerWidth - r.right),
+                };
+            }
+            archiveExportMenuOpen.value = true;
+        }
         function closeArchiveExportMenu() {
             archiveExportMenuOpen.value = false;
         }
@@ -9406,6 +9530,12 @@ const app = createApp({
             document.addEventListener('click', onDocumentClickForActivityDrawer);
             startAutopilotPolling();
 
+            // Restore the dragged progress-widget position right away (cheap,
+            // synchronous), then confirm the server boot id in the background —
+            // a new boot id resets the position back to the default corner.
+            restoreProgressOverlayPos();
+            loadServerStatus();
+
             // Show UI immediately with async data loading in background
             // This makes the app feel much faster
             const dataLoadPromises = [
@@ -9997,6 +10127,7 @@ const app = createApp({
             metadataTranslateLoading, metadataTranslateError, metadataTranslateSuccess,
             metadataTranslateStep, metadataTranslateElapsedSec,
             scanRunning, scanProgress, fetchRunning, fetchProgress, lastFetchSummary,
+            progressOverlayStyle, progressOverlayDragStart,
             showScanPathsPanel, scanPathsInput, scanPathsLoading, scanPathsSaving,
             scanPathsError, scanPathsSuccess, scanRecursive,
             maintenanceLoading, maintenanceActionLoading, maintenancePreview, maintenanceMessage, maintenanceError,
@@ -10127,7 +10258,7 @@ const app = createApp({
             transcriptIoBusy, transcriptIoMessage, transcriptIoError, transcriptIoSummary, transcriptIoReplace, transcriptIoAcceptZip, transcriptIoFileInput,
             exportTranscripts, triggerImportTranscripts, onImportTranscriptsFile,
             packageBusy, packageMessage, packageError, packageIncludeAudio, packageAllRuns, packagePreservePaths, packageIncludeSrt, packageIncludeTxt, packageIncludeTracklist, packageIncludeAllArchiveFiles, downloadItemPackage, openItemAudioFolder,
-            archiveExportMenuOpen, closeArchiveExportMenu, exportPackagePreset,
+            archiveExportMenuOpen, archiveExportMenuRect, openArchiveExportMenu, closeArchiveExportMenu, exportPackagePreset,
             archiveContents, archiveContentsLoading, formatArchiveSize,
             archiveViewMode, archiveCurrentPath, archiveGridEntries, archiveBreadcrumbs, archiveListGroups,
             archiveCollapsedFolders, toggleArchiveFolder, isArchiveFolderCollapsed,

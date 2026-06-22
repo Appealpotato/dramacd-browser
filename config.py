@@ -1,9 +1,16 @@
 import os
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env file if it exists
 load_dotenv()
+
+# Unique id generated once per server process. The frontend reads this via
+# /api/status to tell a browser refresh (same boot id -> keep transient UI
+# state like the dragged scan/fetch progress widget) apart from an app
+# restart (new boot id -> reset that state back to defaults).
+BOOT_ID = secrets.token_hex(8)
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

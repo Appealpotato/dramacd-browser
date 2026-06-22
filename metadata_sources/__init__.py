@@ -9,6 +9,7 @@ DLsite page (store tokutens, physical-only releases, etc.)."""
 from .animate import AnimateSource
 from .base import MetadataSource, SourceError
 from .booth import BoothSource
+from .candybibinba import CandyBibinbaSource
 from .chilchil import ChilChilSource
 from .digiket import DigiketSource
 from .dlsite import DLsiteSource
@@ -42,6 +43,9 @@ SOURCES: list[MetadataSource] = [
     RejetSource(),
     HvdbSource(),
     PokedoraSource(),
+    # CAnDY BIBInBA's own label site — richer than the Pokedora listing it
+    # links out to (full tracklist/characters); paste-URL only.
+    CandyBibinbaSource(),
 ]
 
 _BY_NAME = {s.name: s for s in SOURCES}

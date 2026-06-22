@@ -26,11 +26,22 @@ from models import (
     ConcurrencySettingsUpdateRequest,
 )
 from scraper import fetch_metadata_for_code
-from config import COVERS_DIR
+from config import COVERS_DIR, BOOT_ID
 from auth import require_api_key
 import database as db
 
 router = APIRouter(prefix="/api")
+
+
+@router.get("/status")
+async def get_status():
+    """Lightweight liveness + process-identity probe.
+
+    ``boot_id`` is regenerated every time the server process starts, so the
+    frontend can persist transient UI state (e.g. the dragged scan/fetch
+    progress widget position) across browser refreshes while still resetting
+    it whenever the app itself is restarted."""
+    return {"boot_id": BOOT_ID}
 
 # Folders the local user chose via /system/pick-folder this session. Acts as
 # the allowlist (together with the configured scan paths) for
@@ -112,7 +123,7 @@ async def list_items(
     listen_status: Optional[str] = Query(None, pattern="^(backlog|want_to_listen|listening|completed|on_hold|dropped|wishlist)$"),
     listen_statuses: Optional[List[str]] = Query(None),
     tokuten_kind: Optional[str] = Query(None, pattern="^(audio|book|image|misc)$"),
-    tokuten_source: Optional[str] = Query(None, pattern="^(dlsite|booth|melon|animate|stellaworth|gamers|chil_chil|vgmdb|rejet|fanza|toranoana|digiket|gyutto|hvdb|pokedora|physical|other)$"),
+    tokuten_source: Optional[str] = Query(None, pattern="^(dlsite|booth|melon|animate|stellaworth|gamers|chil_chil|vgmdb|rejet|fanza|toranoana|digiket|gyutto|hvdb|pokedora|candybibinba|physical|other)$"),
     limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
 ):

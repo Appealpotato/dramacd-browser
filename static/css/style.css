@@ -1428,13 +1428,24 @@ textarea.notes-input:focus { border-color: var(--accent); }
     position: fixed;
     bottom: 24px;
     right: 24px;
-    background: var(--bg-card);
+    /* --bg-card is translucent in some themes (starlit/sweet), which let the
+       library bleed through this floating widget. Use the solid --bg surface
+       so it reads as an opaque card in every theme. */
+    background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 16px 20px;
     box-shadow: var(--shadow);
     z-index: 300;
     min-width: 300px;
+    /* Draggable: the whole card is a grab handle except its buttons (which
+       reset the cursor below). Disable text selection so a drag never
+       highlights the progress text. */
+    cursor: move;
+    user-select: none;
+}
+.progress-overlay button {
+    cursor: pointer;
 }
 
 .progress-title {
@@ -1754,7 +1765,9 @@ select, .filter-select {
 .scan-paths-panel,
 .fetch-summary,
 .progress-overlay {
-    background: var(--bg-card);
+    /* Keep this in sync with the primary rule above: solid --bg, not the
+       translucent --bg-card, so the widget stays opaque in every theme. */
+    background: var(--bg);
     box-shadow: var(--shadow);
 }
 
@@ -2829,10 +2842,11 @@ input[type="number"]::-webkit-outer-spin-button {
     display: inline-flex;
 }
 .archive-export-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    right: 0;
-    z-index: 60;
+    /* Body-anchored fixed popup (top/right set inline from the trigger's
+       rect) so it escapes the Archive panel's overflow clipping — same
+       pattern as .play-status-dropdown. */
+    position: fixed;
+    z-index: 9300;
     min-width: 260px;
     background: var(--bg);
     border: 1px solid var(--border);

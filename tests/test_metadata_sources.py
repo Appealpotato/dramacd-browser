@@ -10,6 +10,7 @@ import metadata_sources
 from metadata_sources.animate import AnimateSource
 from metadata_sources.base import empty_metadata, loose_match, normalize_date, normalize_text
 from metadata_sources.booth import BoothSource
+from metadata_sources.candybibinba import CandyBibinbaSource
 from metadata_sources.chilchil import ChilChilSource
 from metadata_sources.digiket import DigiketSource
 from metadata_sources.dlsite import DLsiteSource
@@ -50,6 +51,10 @@ class RegistryTests(unittest.TestCase):
         self.assertIsInstance(
             metadata_sources.match_url("https://rejet.jp/works/?cat=41"),
             RejetSource,
+        )
+        self.assertIsInstance(
+            metadata_sources.match_url("https://candybibinba.com/product/bodyescape5/"),
+            CandyBibinbaSource,
         )
         self.assertIsInstance(
             metadata_sources.match_url(
@@ -119,16 +124,16 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(names, {
             "dlsite", "gamers", "chil_chil", "rejet",
             "booth", "animate", "stellaworth", "fanza", "melon",
-            "digiket", "gyutto", "hvdb", "wayback", "pokedora",
+            "digiket", "gyutto", "hvdb", "wayback", "pokedora", "candybibinba",
         })
         for s in sources:
             self.assertIsInstance(s["supports_search"], bool)
             self.assertTrue(s["url_example"])
         searchable = {s["name"] for s in sources if s["supports_search"]}
         # fanza is URL-paste only (search shape unverifiable behind the WAF);
-        # wayback is paste-a-snapshot-URL only by nature; pokedora is paste-only
-        # for now (search not yet wired).
-        self.assertEqual(names - searchable, {"fanza", "wayback", "pokedora"})
+        # wayback is paste-a-snapshot-URL only by nature; pokedora and
+        # candybibinba are paste-only (neither site exposes a search index).
+        self.assertEqual(names - searchable, {"fanza", "wayback", "pokedora", "candybibinba"})
 
 
 class NormalizeDateTests(unittest.TestCase):
@@ -244,6 +249,54 @@ class PokedoraParseTests(unittest.TestCase):
         self.assertEqual(meta["maker"], "Tunaboni Collections")
         self.assertIn("get_image.php", meta["cover_url"])
         self.assertIn("特典付きドラマCD", meta["extra"]["tags"])
+
+
+class CandyBibinbaParseTests(unittest.TestCase):
+    def setUp(self):
+        self.source = CandyBibinbaSource()
+
+    def test_match_url(self):
+        self.assertTrue(self.source.matches_url(
+            "https://candybibinba.com/product/bodyescape5/"
+        ))
+        self.assertTrue(self.source.matches_url(
+            "https://candybibinba.com/product/bodyescape5"
+        ))
+        # Slug captured for the canonical rebuild.
+        m = self.source._url_re.search("https://candybibinba.com/product/bodyescape5/")
+        self.assertEqual(m.group(1), "bodyescape5")
+        # Non-product paths (topics/campaign pages) must not match.
+        self.assertFalse(self.source.matches_url("https://candybibinba.com/topics/bodyescape5/"))
+        self.assertFalse(self.source.matches_url("https://www.dlsite.com/foo"))
+
+    def test_parse_product(self):
+        meta = self.source.parse_product(
+            fixture("candybibinba_product.html"),
+            "https://candybibinba.com/product/bodyescape5/",
+        )
+        self.assertEqual(meta["source"], "candybibinba")
+        # h1 title, no 【出演声優…】 cast bracket.
+        self.assertEqual(meta["title"], "BODY ESCAPE -SHIKI Sequel-")
+        # CAST row "テトラポット登、他" -> the 他 filler token is dropped.
+        self.assertEqual(meta["seiyuu"], ["テトラポット登"])
+        # 企画・原作 doubles as the maker; series strips its シリーズ suffix.
+        self.assertEqual(meta["maker"], "CAnDY BIBInBA")
+        self.assertEqual(meta["series"], "BODY ESCAPE")
+        self.assertIn("jacket/bodyescape5.jpg", meta["cover_url"])
+        self.assertIn("ダミーヘッドマイク", meta["description"])
+        # Release date / price aren't on the page (they live on Pokedora).
+        self.assertIsNone(meta["release_date"])
+        self.assertIsNone(meta["price"])
+        # Structured extras: staff credits, full tracklist, character bios.
+        self.assertEqual(meta["extra"]["staff"]["イラスト"], "荒居すすぐ")
+        self.assertEqual(len(meta["extra"]["tracks"]), 6)
+        self.assertTrue(meta["extra"]["tracks"][0].startswith("1. Introduction"))
+        self.assertTrue(any("cv.テトラポット登" in c for c in meta["extra"]["characters"]))
+        # The store cross-link out to Pocket Drama CD is captured.
+        self.assertEqual(
+            meta["extra"]["pokedora_url"],
+            "https://pokedora.com/products/detail.php?product_id=128897",
+        )
 
 
 class BoothParseTests(unittest.TestCase):

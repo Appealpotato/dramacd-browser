@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DramaCD Library</title>
     <link rel="icon" href="/favicon.ico" sizes="any">
-    <link rel="stylesheet" href="/static/css/style.css?v=130">
+    <link rel="stylesheet" href="/static/css/style.css?v=131">
     <link rel="stylesheet" href="/static/css/player-themes.css?v=10">
     <link rel="stylesheet" href="/static/css/app-themes.css?v=17">
 </head>
@@ -196,6 +196,7 @@
                                 <option value="gyutto">Gyutto</option>
                                 <option value="hvdb">HVDB</option>
                                 <option value="pokedora">Pokedora</option>
+                                <option value="candybibinba">CAnDY BIBInBA</option>
                                 <option value="physical">Physical</option>
                                 <option value="other">Other</option>
                             </select>
@@ -1178,34 +1179,17 @@
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                                             </button>
                                         </template>
-                                        <div class="archive-export-menu" v-click-outside="closeArchiveExportMenu" @click.stop>
+                                        <!-- Trigger only — the dropdown itself is rendered as a
+                                             body-anchored fixed popup near the play-status
+                                             dropdowns so it escapes this panel's overflow. -->
+                                        <div class="archive-export-menu">
                                             <button class="icon-btn"
                                                     title="Export package"
-                                                    @click="archiveExportMenuOpen = !archiveExportMenuOpen"
+                                                    @click.stop="openArchiveExportMenu($event)"
+                                                    @mousedown.stop
                                                     :disabled="!pipelineSelectedItemId">
                                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
                                             </button>
-                                            <div class="archive-export-dropdown" v-if="archiveExportMenuOpen">
-                                                <div class="archive-export-heading">Export as…</div>
-                                                <button class="archive-export-item"
-                                                        @click="exportPackagePreset('as_release')"
-                                                        :disabled="packageBusy">
-                                                    <div class="archive-export-item-title">AS Release</div>
-                                                    <div class="archive-export-item-sub">Audio · original folders · SRT · tracklist · all archive files</div>
-                                                </button>
-                                                <button class="archive-export-item"
-                                                        @click="exportPackagePreset('subtitles_only')"
-                                                        :disabled="packageBusy">
-                                                    <div class="archive-export-item-title">Subtitles Only</div>
-                                                    <div class="archive-export-item-sub">SRT + TXT, no audio</div>
-                                                </button>
-                                                <button class="archive-export-item"
-                                                        @click="exportPackagePreset('full_package')"
-                                                        :disabled="packageBusy">
-                                                    <div class="archive-export-item-title">Full Package</div>
-                                                    <div class="archive-export-item-sub">Everything — audio, all formats, all archive files</div>
-                                                </button>
-                                            </div>
                                         </div>
                                     </div>
                                     <div class="card-toggle" :class="{ collapsed: !pipelineSectionsOpen.extraction }">▼</div>
@@ -4338,6 +4322,34 @@
             </button>
         </div>
 
+        <!-- Archive "Export package" menu — body-anchored fixed popup so it
+             escapes the Atelier Archive panel's overflow clipping. Position
+             (top/right) is computed from the trigger's rect on open. -->
+        <div v-if="archiveExportMenuOpen"
+             v-click-outside="closeArchiveExportMenu"
+             class="archive-export-dropdown"
+             :style="{ top: (archiveExportMenuRect?.top || 0) + 'px', right: (archiveExportMenuRect?.right || 0) + 'px' }">
+            <div class="archive-export-heading">Export as…</div>
+            <button class="archive-export-item"
+                    @click="exportPackagePreset('as_release')"
+                    :disabled="packageBusy">
+                <div class="archive-export-item-title">AS Release</div>
+                <div class="archive-export-item-sub">Audio · original folders · SRT · tracklist · all archive files</div>
+            </button>
+            <button class="archive-export-item"
+                    @click="exportPackagePreset('subtitles_only')"
+                    :disabled="packageBusy">
+                <div class="archive-export-item-title">Subtitles Only</div>
+                <div class="archive-export-item-sub">SRT + TXT, no audio</div>
+            </button>
+            <button class="archive-export-item"
+                    @click="exportPackagePreset('full_package')"
+                    :disabled="packageBusy">
+                <div class="archive-export-item-title">Full Package</div>
+                <div class="archive-export-item-sub">Everything — audio, all formats, all archive files</div>
+            </button>
+        </div>
+
         <!-- Toast stack (autopilot terminal events) -->
         <div class="toast-stack">
             <transition-group name="toast">
@@ -4352,7 +4364,9 @@
         </div>
 
         <!-- Progress overlay -->
-        <div class="progress-overlay" v-if="scanRunning || fetchRunning">
+        <div class="progress-overlay" v-if="scanRunning || fetchRunning"
+             :style="progressOverlayStyle"
+             @pointerdown="progressOverlayDragStart">
             <div v-if="scanRunning">
                 <div class="progress-title">Scanning folder...</div>
                 <div class="progress-bar-outer">
@@ -4391,7 +4405,7 @@
     </div>
 
     <script src="/static/js/vue.global.prod.js"></script>
-    <script src="/static/js/app.js?v=173"></script>
+    <script src="/static/js/app.js?v=175"></script>
 </body>
 </html>
 
