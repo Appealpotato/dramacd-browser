@@ -102,6 +102,11 @@ class OpenRouterTrackTranslator:
         self.endpoint = _normalize_chat_completions_url(self.base_url)
         self.provider_label = provider_label
         self._history: list[dict] = []
+        # The response_format that last succeeded against this server, learned
+        # on the first chunk and tried first on every later chunk so we don't
+        # re-pay a doomed negotiation (e.g. LM Studio's json_object 400) per
+        # chunk. None until the first successful round-trip.
+        self._preferred_rf_type: str | None = None
 
     @staticmethod
     def _extract_message_content(message) -> str:
@@ -129,27 +134,33 @@ class OpenRouterTrackTranslator:
     async def _send_text(self, text: str, *, json_schema: dict | None = None) -> str:
         self._history.append({"role": "user", "content": text})
 
-        # Response-format negotiation, tried in order until one is accepted:
-        #   1. json_object  — the OpenAI standard; OpenRouter / Chutes and
-        #      older LM Studio builds honour it (first try succeeds, the rest
-        #      are never sent).
-        #   2. json_schema  — newer LM Studio / vLLM REJECT json_object with
-        #      400 ("'response_format.type' must be 'json_schema' or 'text'").
-        #      A schema still constrains weak local models to valid JSON, so
-        #      we fall through to it rather than dropping straight to free text.
-        #   3. none         — last-resort unconstrained text; the caller's
-        #      robust JSON extraction has to cope.
-        attempts: list[dict | None] = [{"type": "json_object"}]
+        # Response formats we know how to ask for, tried in order until one is
+        # accepted:
+        #   json_object  — the OpenAI standard; OpenRouter / Chutes and older
+        #                  LM Studio builds honour it.
+        #   json_schema  — newer LM Studio / vLLM REJECT json_object with 400
+        #                  ("'response_format.type' must be 'json_schema' or
+        #                  'text'"); a schema still constrains weak local
+        #                  models to valid JSON, so prefer it over free text.
+        #   none         — last-resort unconstrained text; the caller's robust
+        #                  JSON extraction has to cope.
+        candidates: dict[str, dict | None] = {"json_object": {"type": "json_object"}}
         if json_schema is not None:
-            attempts.append({"type": "json_schema", "json_schema": json_schema})
-        attempts.append(None)
+            candidates["json_schema"] = {"type": "json_schema", "json_schema": json_schema}
+        candidates["none"] = None
 
-        def _rf_name(rf: dict | None) -> str:
-            return rf["type"] if rf else "none"
+        order = list(candidates.keys())
+        # Once a format has worked for this translator (this job / server), try
+        # it FIRST on every later chunk — otherwise a server that rejects
+        # json_object would eat a wasted 400 on every single chunk.
+        if self._preferred_rf_type in candidates:
+            order.remove(self._preferred_rf_type)
+            order.insert(0, self._preferred_rf_type)
 
         last_detail = ""
-        for idx, response_format in enumerate(attempts):
-            is_last = idx == len(attempts) - 1
+        for idx, rf_name in enumerate(order):
+            response_format = candidates[rf_name]
+            is_last = idx == len(order) - 1
             # OpenAI-style endpoints don't understand our cache breakpoint
             # marker; strip it so it never reaches the wire.
             cleaned = [
@@ -170,7 +181,7 @@ class OpenRouterTrackTranslator:
                 self.provider_label,
                 self.endpoint,
                 self.model,
-                _rf_name(response_format),
+                rf_name,
             )
             headers = {"Content-Type": "application/json"}
             if self.api_key:
@@ -190,9 +201,8 @@ class OpenRouterTrackTranslator:
                 if not is_last:
                     logger.warning(
                         "[%s] %s rejected response_format=%s (%d): %s — retrying with %s",
-                        label, self.endpoint, _rf_name(response_format),
-                        resp.status_code, resp.text[:200],
-                        _rf_name(attempts[idx + 1]),
+                        label, self.endpoint, rf_name,
+                        resp.status_code, resp.text[:200], order[idx + 1],
                     )
                     last_detail = f"{resp.status_code} {resp.text[:200]}"
                     continue
@@ -215,6 +225,8 @@ class OpenRouterTrackTranslator:
             message = choices[0].get("message") or {}
             out = self._extract_message_content(message)
             if out:
+                # Remember the winning format so later chunks lead with it.
+                self._preferred_rf_type = rf_name
                 self._history.append({"role": "assistant", "content": out})
                 return out
 
