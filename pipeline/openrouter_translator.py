@@ -4,6 +4,8 @@ import re
 
 import httpx
 
+from config import llm_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +48,46 @@ def _normalize_chat_completions_url(base_url: str) -> str:
 class OpenRouterTrackTranslator:
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
+    # JSON-schema response formats, used only as a fallback when a server
+    # rejects the json_object response_format (newer LM Studio / vLLM answer
+    # such requests with 400 "'response_format.type' must be 'json_schema' or
+    # 'text'"). OpenAI strict json_schema requires the root to be an OBJECT,
+    # not a bare array, so the segment list is wrapped under "segments" —
+    # _coerce_rows_payload already unwraps that key transparently.
+    CHUNK_RESPONSE_SCHEMA = {
+        "name": "drama_translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "segment_index": {"type": "integer"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["segment_index", "text"],
+                    },
+                },
+            },
+            "required": ["segments"],
+        },
+    }
+    TEXT_RESPONSE_SCHEMA = {
+        "name": "translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+    }
+
     def __init__(
         self,
         *,
@@ -84,11 +126,30 @@ class OpenRouterTrackTranslator:
             return "\n".join(parts).strip()
         return ""
 
-    async def _send_text(self, text: str) -> str:
+    async def _send_text(self, text: str, *, json_schema: dict | None = None) -> str:
         self._history.append({"role": "user", "content": text})
 
+        # Response-format negotiation, tried in order until one is accepted:
+        #   1. json_object  — the OpenAI standard; OpenRouter / Chutes and
+        #      older LM Studio builds honour it (first try succeeds, the rest
+        #      are never sent).
+        #   2. json_schema  — newer LM Studio / vLLM REJECT json_object with
+        #      400 ("'response_format.type' must be 'json_schema' or 'text'").
+        #      A schema still constrains weak local models to valid JSON, so
+        #      we fall through to it rather than dropping straight to free text.
+        #   3. none         — last-resort unconstrained text; the caller's
+        #      robust JSON extraction has to cope.
+        attempts: list[dict | None] = [{"type": "json_object"}]
+        if json_schema is not None:
+            attempts.append({"type": "json_schema", "json_schema": json_schema})
+        attempts.append(None)
+
+        def _rf_name(rf: dict | None) -> str:
+            return rf["type"] if rf else "none"
+
         last_detail = ""
-        for use_response_format in (True, False):
+        for idx, response_format in enumerate(attempts):
+            is_last = idx == len(attempts) - 1
             # OpenAI-style endpoints don't understand our cache breakpoint
             # marker; strip it so it never reaches the wire.
             cleaned = [
@@ -101,20 +162,20 @@ class OpenRouterTrackTranslator:
                 "messages": cleaned,
                 "temperature": 0.2,
             }
-            if use_response_format:
-                request_json["response_format"] = {"type": "json_object"}
+            if response_format is not None:
+                request_json["response_format"] = response_format
 
             logger.info(
                 "[%s] POST %s model=%s response_format=%s",
                 self.provider_label,
                 self.endpoint,
                 self.model,
-                use_response_format,
+                _rf_name(response_format),
             )
             headers = {"Content-Type": "application/json"}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     self.endpoint,
                     headers=headers,
@@ -123,12 +184,15 @@ class OpenRouterTrackTranslator:
 
             label = self.provider_label
             if resp.status_code >= 400:
-                # Some OpenAI-compatible proxies (notably Anthropic shims) reject
-                # response_format. If the first attempt fails, retry without it.
-                if use_response_format:
+                # Some OpenAI-compatible servers reject a given response_format
+                # (Anthropic shims reject them all; newer LM Studio rejects
+                # json_object specifically). Fall through to the next format.
+                if not is_last:
                     logger.warning(
-                        "[%s] %s rejected response_format=json_object (%d): %s — retrying without it",
-                        label, self.endpoint, resp.status_code, resp.text[:200],
+                        "[%s] %s rejected response_format=%s (%d): %s — retrying with %s",
+                        label, self.endpoint, _rf_name(response_format),
+                        resp.status_code, resp.text[:200],
+                        _rf_name(attempts[idx + 1]),
                     )
                     last_detail = f"{resp.status_code} {resp.text[:200]}"
                     continue
@@ -144,7 +208,7 @@ class OpenRouterTrackTranslator:
             choices = data.get("choices") or []
             if not choices:
                 last_detail = str(data)[:300]
-                if use_response_format:
+                if not is_last:
                     continue
                 raise RuntimeError(f"{label} returned no choices. Response: {last_detail}")
 
@@ -155,7 +219,7 @@ class OpenRouterTrackTranslator:
                 return out
 
             last_detail = str(choices[0])[:300]
-            if use_response_format:
+            if not is_last:
                 continue
             raise RuntimeError(f"{label} returned empty content. Choice: {last_detail}")
 
@@ -268,7 +332,7 @@ class OpenRouterTrackTranslator:
             "Do not add commentary.\n\n"
             f"Input:\n{raw_output}"
         )
-        repaired_raw = await self._send_text(prompt)
+        repaired_raw = await self._send_text(prompt, json_schema=self.CHUNK_RESPONSE_SCHEMA)
         try:
             repaired_parsed = self._extract_json(repaired_raw)
         except Exception:
@@ -281,7 +345,7 @@ class OpenRouterTrackTranslator:
             "Return JSON object only: {\"text\":\"...\"}\n\n"
             f"Text:\n{text}"
         )
-        raw = await self._send_text(prompt)
+        raw = await self._send_text(prompt, json_schema=self.TEXT_RESPONSE_SCHEMA)
         parsed = self._extract_json(raw)
         if isinstance(parsed, dict) and parsed.get("text"):
             return str(parsed["text"]).strip()
@@ -358,7 +422,7 @@ class OpenRouterTrackTranslator:
             "Return the JSON array only:"
         )
         logger.info(f"[OpenRouterTrackTranslator] Translating {len(chunk_segments)} segments to {target_language}")
-        raw = await self._send_text(prompt)
+        raw = await self._send_text(prompt, json_schema=self.CHUNK_RESPONSE_SCHEMA)
         logger.debug(f"[OpenRouterTrackTranslator] Raw response (first 400 chars): {str(raw)[:400]}")
 
         parsed = None

@@ -4,6 +4,8 @@ from math import ceil
 
 import httpx
 
+from config import llm_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +49,7 @@ class GeminiTrackTranslator:
 
     async def _send_text(self, text: str) -> str:
         self._history.append({"role": "user", "parts": [{"text": text}]})
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 self._url(),
                 params={"key": self.api_key},

@@ -17,6 +17,7 @@ import logging
 
 import httpx
 
+from config import llm_timeout
 from pipeline.openrouter_translator import (
     CACHE_BREAKPOINT_MARKER,
     OpenRouterTrackTranslator,
@@ -162,7 +163,7 @@ class AnthropicCompatTrackTranslator(OpenRouterTrackTranslator):
             self.model,
             cache_breakpoints,
         )
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 self.endpoint,
                 headers=anthropic_headers(self.api_key),

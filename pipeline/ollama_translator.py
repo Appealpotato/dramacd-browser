@@ -70,12 +70,15 @@ async def ollama_chat(
     temperature: float = 0.2,
     timeout: float = OLLAMA_TIMEOUT,
     num_ctx: int = OLLAMA_NUM_CTX,
+    format: dict | None = None,
 ) -> str:
     """One non-streaming /api/chat round-trip. ``messages`` is OpenAI-style
     ``[{role, content}]``. Sends ``think: false`` so thinking models answer
     directly (faster, and no reasoning prose polluting JSON output); retries
     once without the parameter for models / older Ollama versions that
-    reject it."""
+    reject it. ``format`` is an optional JSON schema (Ollama's native
+    structured-output control — the equivalent of the OpenAI json_schema
+    response format) that constrains weak local models to valid JSON."""
     endpoint = _normalize_ollama_chat_url(base_url)
     if not endpoint:
         raise RuntimeError("ollama: base URL is required")
@@ -86,7 +89,11 @@ async def ollama_chat(
         "think": False,
         "options": {"temperature": temperature, "num_ctx": num_ctx},
     }
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    if format is not None:
+        body["format"] = format
+    # Generous read window (local inference is slow) but a short connect window
+    # so an offline server fails fast instead of hanging for the full timeout.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=15.0)) as client:
         resp = await client.post(endpoint, json=body)
         if resp.status_code >= 400 and "think" in (resp.text or "").lower():
             logger.warning(
@@ -127,7 +134,7 @@ class OllamaTrackTranslator(OpenRouterTrackTranslator):
         )
         self.endpoint = _normalize_ollama_chat_url(self.base_url)
 
-    async def _send_text(self, text: str) -> str:
+    async def _send_text(self, text: str, *, json_schema: dict | None = None) -> str:
         # Stateless: every chunk prompt is self-contained (full instructions +
         # description + glossary + last-4 prior segments are rebuilt each
         # call), so the conversation history the cloud translators keep for
@@ -136,4 +143,7 @@ class OllamaTrackTranslator(OpenRouterTrackTranslator):
         # drops the FRONT of the prompt — the instruction block — first.
         messages = [{"role": "user", "content": text.replace(CACHE_BREAKPOINT_MARKER, "\n")}]
         logger.info("[%s] POST %s model=%s", self.provider_label, self.endpoint, self.model)
-        return await ollama_chat(self.base_url, self.model, messages)
+        # The base class passes an OpenAI-style {name, strict, schema} wrapper;
+        # Ollama's ``format`` wants the bare schema object, so unwrap it.
+        fmt = json_schema.get("schema") if isinstance(json_schema, dict) else None
+        return await ollama_chat(self.base_url, self.model, messages, format=fmt)

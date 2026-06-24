@@ -94,6 +94,27 @@ FFMPEG_PATH = os.environ.get("DRAMACD_FFMPEG_PATH", "").strip() or None
 MAX_WHISPER_JOBS = _env_int("DRAMACD_MAX_WHISPER_JOBS", 1, 1, 8)
 MAX_LLM_JOBS = _env_int("DRAMACD_MAX_LLM_JOBS", 3, 1, 16)
 
+# --- LLM request timeouts -------------------------------------------------
+# Local models on consumer hardware (Ollama, LM Studio, llama.cpp, vLLM) can
+# spend minutes on a single long translation chunk, so the READ timeout is
+# deliberately generous; cloud providers always answer well within it. The
+# CONNECT timeout stays short so an unreachable / offline server fails fast
+# instead of hanging for the whole read window. Both are env-overridable for
+# an unusually slow rig or a flaky network.
+LLM_TIMEOUT_SECONDS = float(os.environ.get("DRAMACD_LLM_TIMEOUT", "600"))
+LLM_CONNECT_TIMEOUT = float(os.environ.get("DRAMACD_LLM_CONNECT_TIMEOUT", "15"))
+
+
+def llm_timeout(read: float | None = None, connect: float | None = None):
+    """Build an ``httpx.Timeout`` for LLM calls: a long read window (local
+    models are slow) with a short connect window (fail fast when the server is
+    down). Pass ``read`` to widen/narrow the window for a specific call."""
+    import httpx
+    return httpx.Timeout(
+        LLM_TIMEOUT_SECONDS if read is None else read,
+        connect=LLM_CONNECT_TIMEOUT if connect is None else connect,
+    )
+
 # Translation provider settings
 GEMINI_API_KEY = os.environ.get("DRAMACD_GEMINI_API_KEY", "").strip() or None
 GEMINI_MODEL = os.environ.get("DRAMACD_GEMINI_MODEL", "gemini-2.0-flash")

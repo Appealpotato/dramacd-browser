@@ -4,6 +4,8 @@ import re
 
 import httpx
 
+from config import llm_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +50,7 @@ class ChutesTrackTranslator:
             if use_response_format:
                 request_json["response_format"] = {"type": "json_object"}
 
-            async with httpx.AsyncClient(timeout=120) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     "https://llm.chutes.ai/v1/chat/completions",
                     headers={

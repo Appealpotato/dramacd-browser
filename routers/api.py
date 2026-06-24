@@ -26,7 +26,7 @@ from models import (
     ConcurrencySettingsUpdateRequest,
 )
 from scraper import fetch_metadata_for_code
-from config import COVERS_DIR, BOOT_ID
+from config import COVERS_DIR, BOOT_ID, llm_timeout
 from auth import require_api_key
 import database as db
 
@@ -663,7 +663,7 @@ async def _translate_title_description_with_openrouter(title_ja: str, descriptio
         if use_response_format:
             request_json["response_format"] = {"type": "json_object"}
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -788,7 +788,7 @@ async def _translate_title_description_with_chutes(title_ja: str, description_ja
         if use_response_format:
             request_json["response_format"] = {"type": "json_object"}
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 "https://llm.chutes.ai/v1/chat/completions",
                 headers={
@@ -871,6 +871,26 @@ async def _translate_title_description_with_chutes(title_ja: str, description_ja
     return title_en, description_en, seiyuu_en, cultural_notes
 
 
+# JSON-schema response format for the metadata translation, used as a fallback
+# for servers that reject the json_object response_format (newer LM Studio /
+# vLLM answer 400 "'response_format.type' must be 'json_schema' or 'text'").
+_METADATA_RESPONSE_SCHEMA = {
+    "name": "metadata_translation",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "title_en": {"type": "string"},
+            "description_en": {"type": "string"},
+            "seiyuu_en": {"type": "array", "items": {"type": "string"}},
+            "cultural_notes": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["title_en", "description_en", "seiyuu_en", "cultural_notes"],
+    },
+}
+
+
 async def _translate_title_description_with_openai_compat(title_ja: str, description_ja: str, seiyuu_ja: list[str]) -> tuple[str, str, list[str], list[str]]:
     api_key = await db.get_runtime_openai_compat_api_key()
     model = await db.get_runtime_openai_compat_model()
@@ -900,8 +920,12 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         if request_format == "ollama":
             from pipeline.ollama_translator import ollama_chat
             try:
+                # Constrain the local model to the metadata JSON shape via
+                # Ollama's native structured-output `format` (the schema, not
+                # the OpenAI {name, strict, schema} wrapper).
                 return await ollama_chat(
-                    base_url, model, [{"role": "user", "content": prompt_text}]
+                    base_url, model, [{"role": "user", "content": prompt_text}],
+                    format=_METADATA_RESPONSE_SCHEMA["schema"],
                 )
             except RuntimeError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)[:400])
@@ -924,7 +948,7 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
             if _supports_temperature(model):
                 request_json["temperature"] = 0.2
             from pipeline.anthropic_compat_translator import anthropic_headers
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     endpoint,
                     headers=anthropic_headers(api_key),
@@ -965,33 +989,43 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
         endpoint = _normalize_chat_completions_url(base_url)
 
         resp = None
-        for use_response_format in (True, False):
+        # Response-format negotiation, mirroring the pipeline translator:
+        # json_object first (OpenAI standard), then json_schema (newer LM
+        # Studio / vLLM reject json_object with a 400), then unconstrained
+        # text. The schema keeps weak local models emitting parseable JSON.
+        rf_attempts = [
+            {"type": "json_object"},
+            {"type": "json_schema", "json_schema": _METADATA_RESPONSE_SCHEMA},
+            None,
+        ]
+        for _rf_idx, _rf in enumerate(rf_attempts):
+            _rf_is_last = _rf_idx == len(rf_attempts) - 1
             request_json = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt_text}],
                 "temperature": 0.2,
             }
-            if use_response_format:
-                request_json["response_format"] = {"type": "json_object"}
+            if _rf is not None:
+                request_json["response_format"] = _rf
             _headers = {"Content-Type": "application/json"}
             if api_key:
                 _headers["Authorization"] = f"Bearer {api_key}"
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     endpoint,
                     headers=_headers,
                     json=request_json,
                 )
             if resp.status_code >= 400:
-                # Anthropic-via-proxy and similar shims reject response_format;
-                # retry once without it before giving up.
-                if use_response_format:
+                # Shims/servers that reject this response_format: fall through
+                # to the next one before giving up.
+                if not _rf_is_last:
                     continue
                 break
             data = resp.json()
             if data.get("choices"):
                 break
-            if not use_response_format:
+            if _rf_is_last:
                 break
 
         if resp is None:
@@ -1075,13 +1109,30 @@ async def _translate_title_description_with_openai_compat(title_ja: str, descrip
 
 async def _run_metadata_translation_with_provider(provider: str, title_ja: str, description_ja: str, seiyuu_ja: list[str]):
     chosen = str(provider or "gemini").strip().lower()
-    if chosen == "openrouter":
-        return await _translate_title_description_with_openrouter(title_ja, description_ja, seiyuu_ja)
-    if chosen == "chutes":
-        return await _translate_title_description_with_chutes(title_ja, description_ja, seiyuu_ja)
-    if chosen == "openai_compat":
-        return await _translate_title_description_with_openai_compat(title_ja, description_ja, seiyuu_ja)
-    return await _translate_title_description_with_gemini(title_ja, description_ja, seiyuu_ja)
+    try:
+        if chosen == "openrouter":
+            return await _translate_title_description_with_openrouter(title_ja, description_ja, seiyuu_ja)
+        if chosen == "chutes":
+            return await _translate_title_description_with_chutes(title_ja, description_ja, seiyuu_ja)
+        if chosen == "openai_compat":
+            return await _translate_title_description_with_openai_compat(title_ja, description_ja, seiyuu_ja)
+        return await _translate_title_description_with_gemini(title_ja, description_ja, seiyuu_ja)
+    except httpx.TimeoutException as exc:
+        # A slow local model must surface as a clean 504 — an unhandled
+        # ReadTimeout here crashes the request as a raw 500.
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"'{chosen}' translation request timed out ({type(exc).__name__}). "
+                "Local models can be slow — raise DRAMACD_LLM_TIMEOUT or try a "
+                "smaller/faster model."
+            ),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"'{chosen}' translation endpoint error: {type(exc).__name__}: {str(exc)[:200]}",
+        )
 
 
 async def _provider_has_key(provider: str) -> bool:
@@ -1102,6 +1153,28 @@ async def _provider_has_key(provider: str) -> bool:
 
 
 async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
+    """Timeout/transport-safe wrapper around the per-provider dispatch. A slow
+    or unreachable local model surfaces as a clean 504/502 instead of an
+    unhandled ReadTimeout — which would otherwise crash the request as a raw
+    500 ("Exception in ASGI application")."""
+    try:
+        return await _llm_one_shot_json_impl(prompt)
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"LLM request timed out ({type(exc).__name__}). Local models can "
+                "be slow — raise DRAMACD_LLM_TIMEOUT or pick a smaller/faster model."
+            ),
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM endpoint error: {type(exc).__name__}: {str(exc)[:200]}",
+        )
+
+
+async def _llm_one_shot_json_impl(prompt: str) -> tuple[str, str]:
     """Run a single-shot LLM request against the active provider and return
     (raw_text, provider). The caller is responsible for parsing the JSON."""
     provider = await db.get_runtime_translation_provider()
@@ -1112,7 +1185,7 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
         if not api_key:
             raise HTTPException(status_code=400, detail="Missing Gemini API key")
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 url,
                 params={"key": api_key},
@@ -1169,7 +1242,7 @@ async def _llm_one_shot_json(prompt: str) -> tuple[str, str]:
             if _supports_temperature(model):
                 anthropic_body["temperature"] = 0.2
             from pipeline.anthropic_compat_translator import anthropic_headers
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     endpoint,
                     headers=anthropic_headers(api_key),
@@ -1227,7 +1300,7 @@ async def _openai_chat_call(endpoint: str, api_key: str, model: str, prompt: str
         _headers = {"Content-Type": "application/json"}
         if api_key:
             _headers["Authorization"] = f"Bearer {api_key}"
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 endpoint,
                 headers=_headers,
@@ -1369,7 +1442,10 @@ async def list_openai_compat_models():
         else:
             headers = {"Authorization": f"Bearer {api_key}"}
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        # Short window — listing is cheap, but a local server busy loading a
+        # model can lag, so allow a little slack (a generous LLM-call timeout
+        # would be overkill here).
+        async with httpx.AsyncClient(timeout=llm_timeout(read=30.0)) as client:
             resp = await client.get(models_url, headers=headers)
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail=f"Models endpoint timed out: {models_url}")

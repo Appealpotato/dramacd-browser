@@ -1,6 +1,8 @@
 import json
 import logging
 
+from config import llm_timeout
+
 logger = logging.getLogger(__name__)
 
 
@@ -129,7 +131,7 @@ class TrackSummarizer:
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 url,
                 params={"key": self.api_key},
@@ -162,7 +164,7 @@ class TrackSummarizer:
 
         url = "https://openrouter.ai/api/v1/chat/completions"
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 url,
                 headers={
@@ -195,7 +197,7 @@ class TrackSummarizer:
 
         url = "https://api.chutes.ai/v1/chat/completions"
 
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=llm_timeout()) as client:
             resp = await client.post(
                 url,
                 headers={
@@ -257,7 +259,7 @@ class TrackSummarizer:
             if _supports_temperature(self.model):
                 anthropic_body["temperature"] = 0.3
             from pipeline.anthropic_compat_translator import anthropic_headers
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     endpoint,
                     headers=anthropic_headers(self.api_key),
@@ -292,7 +294,7 @@ class TrackSummarizer:
             _headers = {"Content-Type": "application/json"}
             if self.api_key:
                 _headers["Authorization"] = f"Bearer {self.api_key}"
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=llm_timeout()) as client:
                 resp = await client.post(
                     endpoint,
                     headers=_headers,
