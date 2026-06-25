@@ -42,7 +42,7 @@ python main.py
 # → open http://localhost:8080
 ```
 
-> **macOS note:** transcription runs on the CPU — CTranslate2 has no Apple-Silicon GPU path. Everything else (library, scanning, metadata, translation, player) is fully supported. `install.py` creates a project-local `.venv` automatically (so you won't hit the `externally-managed-environment` pip error), and `start.command` uses it. On Homebrew's Python, install Tk for the native file pickers: `brew install python-tk@3.12`, and `brew install ffmpeg p7zip` for transcription / rar·7z extraction (the installer offers to do this for you).
+> **macOS note:** transcription runs on the CPU — CTranslate2 has no Apple-Silicon GPU path. Everything else (library, scanning, metadata, translation, player) is fully supported. `install.py` creates a project-local `.venv` automatically (so you won't hit the `externally-managed-environment` pip error), and `start.command` uses it. On Homebrew's Python, install Tk for the native file pickers: `brew install python-tk@3.12`, and `brew install ffmpeg sevenzip` for transcription / rar·7z extraction — use `sevenzip` (provides `7zz`), **not** `p7zip`, which can't decode the RAR5 archives DLsite ships. (The installer offers to do this for you.)
 
 Pipeline features (extraction, transcription, translation, player) are gated behind a runtime toggle in the UI sidebar. Set `DRAMACD_ENABLE_PIPELINE=1` to start with them on, or flip the switch in the sidebar.
 

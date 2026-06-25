@@ -44,8 +44,9 @@ CORE_REQ = HERE / "requirements-core.txt"
 PIPELINE_REQ = HERE / "requirements-pipeline.txt"
 
 # 7-Zip ships its CLI under different names depending on the build/platform:
-# 7z / 7za on Windows + p7zip, 7zz on the modern `sevenzip` Homebrew formula.
-SEVENZIP_BINS = ("7z", "7za", "7zz")
+# 7zz is the modern, maintained build (Homebrew `sevenzip`, and the one that
+# decodes RAR5); 7z / 7za are the Windows build and the old p7zip port.
+SEVENZIP_BINS = ("7zz", "7z", "7za")
 
 
 # --- tiny console helpers -------------------------------------------------
@@ -262,8 +263,8 @@ def manual_hint(tool: str) -> None:
         },
         "7-Zip": {
             "Windows": "winget install 7zip.7zip   (or https://www.7-zip.org/)",
-            "Darwin": "brew install p7zip",
-            "Linux": "sudo apt install p7zip-full",
+            "Darwin": "brew install sevenzip   (modern 7zz; decodes RAR5, unlike p7zip)",
+            "Linux": "sudo apt install 7zip   (or p7zip-full)",
         },
     }
     line = hints.get(tool, {}).get(SYSTEM)
@@ -285,7 +286,7 @@ def ensure_external_tools(*, want_ffmpeg: bool, assume_yes: bool) -> None:
             if pm == "winget":
                 winget_install("7zip.7zip", "7-Zip")
             else:
-                brew_install("p7zip", "7-Zip")
+                brew_install("sevenzip", "7-Zip")
         else:
             manual_hint("7-Zip")
 

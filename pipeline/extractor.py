@@ -101,7 +101,7 @@ AUDIO_EXTENSIONS = {
 
 def get_runtime_archive_support() -> list[str]:
     support = ["zip", "tar"]
-    if _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH"):
+    if _find_binary(["7zz", "7z", "7za"], env_var="DRAMACD_7Z_PATH"):
         support.extend(["rar", "7z"])
     return support
 
@@ -273,7 +273,7 @@ def _safe_extract_tar(archive_path: Path, target_dir: Path):
 
 def _extract_with_7z(archive_path: Path, target_dir: Path):
     target_dir.mkdir(parents=True, exist_ok=True)
-    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7zz", "7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     result = subprocess.run(
@@ -288,6 +288,18 @@ def _extract_with_7z(archive_path: Path, target_dir: Path):
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         message = stderr or stdout or f"7z failed with exit code {result.returncode}"
+        # Common macOS/Linux gotcha: the old, abandoned `p7zip` build can't
+        # decode RAR5 (or some newer .7z methods), so it reads the headers,
+        # lays down zero-byte file stubs, then exits non-zero. Point at a
+        # modern 7-Zip and bin the empty stubs so they don't get indexed as
+        # phantom zero-byte tracks.
+        if archive_path.suffix.lower() == ".rar":
+            message += (
+                "  -- This is a RAR archive; the old p7zip build cannot extract "
+                "RAR5. Install a modern 7-Zip (macOS: `brew install sevenzip`, "
+                "which provides 7zz) or set DRAMACD_7Z_PATH to a 7zz binary."
+            )
+        shutil.rmtree(target_dir, ignore_errors=True)
         raise RuntimeError(message)
 
 
@@ -409,7 +421,7 @@ def _list_with_7z(archive_path: Path) -> list[dict]:
     """Raw ``7z l -slt`` listing for .zip/.rar/.7z. Returns ``[{path, size}]``
     with directories and the archive's own self-record filtered out — but
     *not* sorted or __MACOSX-filtered (those happen in the caller)."""
-    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7zz", "7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     # ``-sccUTF-8`` forces 7z to emit UTF-8 on stdout regardless of the system
@@ -509,7 +521,7 @@ def _open_nested_tar(outer: Path, inner_tar_name: str):
             zf.close()
         return
 
-    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7zz", "7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     proc = subprocess.Popen(
@@ -738,7 +750,7 @@ def stream_archive_file(archive_path: Path, inner_path: str) -> bytes:
     if wrapper_tar:
         return _stream_member_from_nested_tar(archive_path, wrapper_tar, inner_path)
 
-    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7zz", "7z", "7za"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     # ``-so`` streams to stdout; the file we want is named on the command line.
