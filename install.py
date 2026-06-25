@@ -130,24 +130,87 @@ def have_package_manager() -> str | None:
     return None
 
 
+# --- virtual environment --------------------------------------------------
+
+def venv_python(venv_dir: Path) -> Path:
+    """Path to the interpreter inside a venv on this OS."""
+    if IS_WINDOWS:
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def in_virtualenv() -> bool:
+    return sys.prefix != sys.base_prefix
+
+
+def existing_target_python() -> tuple[str, str]:
+    """Which interpreter the deps live in, WITHOUT creating anything.
+    Used by --check and by the launchers' mental model."""
+    if in_virtualenv():
+        return sys.executable, "active virtualenv"
+    vp = venv_python(HERE / ".venv")
+    if vp.exists():
+        return str(vp), "project .venv"
+    return sys.executable, "base interpreter (no venv yet)"
+
+
+def resolve_target_python() -> tuple[str, str]:
+    """Pick (and if needed create) the interpreter to install into.
+
+    Prefer an already-active virtualenv; otherwise create/use a project-local
+    .venv. This is what sidesteps PEP 668's 'externally-managed-environment'
+    pip error on Homebrew Python and most Linux distro Pythons -- you can't
+    pip-install into those system interpreters, but a venv is always fair game."""
+    if in_virtualenv():
+        return sys.executable, "active virtualenv"
+    venv_dir = HERE / ".venv"
+    target = venv_python(venv_dir)
+    if target.exists():
+        return str(target), f"existing {venv_dir.name}"
+    say(f"  Creating a virtual environment at {venv_dir} ...")
+    r = subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=False)
+    if r.returncode == 0 and target.exists():
+        ok(f"Virtual environment created ({venv_dir.name}).")
+        return str(target), f"new {venv_dir.name}"
+    warn("Could not create a virtual environment.")
+    if IS_LINUX:
+        say("        On Debian/Ubuntu, install the venv module first:")
+        say("          sudo apt install python3-venv")
+    say("        Falling back to the base interpreter. If pip then reports")
+    say("        'externally-managed-environment', create a venv by hand:")
+    say(f"          {sys.executable} -m venv .venv")
+    say(f"          . .venv/bin/activate && pip install -r {CORE_REQ.name}")
+    return sys.executable, "base interpreter (venv unavailable)"
+
+
 # --- pip ------------------------------------------------------------------
 
-def pip_install(req_file: Path) -> bool:
+def pip_install(req_file: Path, py: str) -> bool:
     if not req_file.exists():
         warn(f"{req_file.name} not found - skipping.")
         return False
-    say(f"  Installing from {req_file.name} (into {sys.executable}) ...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
-                   check=False)
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(req_file)],
-        check=False,
-    )
+    say(f"  Installing from {req_file.name} ...")
+    subprocess.run([py, "-m", "pip", "install", "--upgrade", "pip"], check=False)
+    result = subprocess.run([py, "-m", "pip", "install", "-r", str(req_file)], check=False)
     if result.returncode != 0:
         warn(f"pip install -r {req_file.name} failed (exit {result.returncode}).")
         return False
     ok(f"{req_file.name} installed.")
     return True
+
+
+def module_in(py: str, name: str) -> bool:
+    """Is import `name` available to interpreter `py`? Runs a subprocess so we
+    can probe the venv, not just the interpreter running this script."""
+    try:
+        r = subprocess.run(
+            [py, "-c", f"import importlib.util,sys; "
+                       f"sys.exit(0 if importlib.util.find_spec({name!r}) else 1)"],
+            capture_output=True,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 # --- external tools -------------------------------------------------------
@@ -280,13 +343,16 @@ def choose_profile(args) -> str:
 
 def run_check() -> None:
     step(f"Environment check - {SYSTEM} (Python {platform.python_version()})")
-    say(f"  Interpreter: {sys.executable}")
+    target, note = existing_target_python()
+    say(f"  Dependency interpreter: {target}  [{note}]")
     say("\n  Core dependencies:")
     for mod in ("fastapi", "uvicorn", "aiosqlite", "dotenv", "httpx", "bs4", "PIL"):
-        (ok if has_module(mod) else warn)(f"{mod}: {'present' if has_module(mod) else 'MISSING'}")
+        present = module_in(target, mod)
+        (ok if present else warn)(f"{mod}: {'present' if present else 'MISSING'}")
     say("\n  Pipeline dependencies (optional):")
     for mod in ("faster_whisper", "ctranslate2", "torch"):
-        (ok if has_module(mod) else warn)(f"{mod}: {'present' if has_module(mod) else 'not installed'}")
+        present = module_in(target, mod)
+        (ok if present else warn)(f"{mod}: {'present' if present else 'not installed'}")
     say("\n  External tools:")
     sz = find_tool(*SEVENZIP_BINS)
     (ok if sz else warn)(f"7-Zip: {sz or 'not found'}")
@@ -317,8 +383,12 @@ def main() -> int:
     profile = choose_profile(args)
     req_file = PIPELINE_REQ if profile == "full" else CORE_REQ
 
+    step("Preparing the Python environment")
+    target_py, note = resolve_target_python()
+    say(f"  Installing into: {target_py}  [{note}]")
+
     step(f"Installing Python dependencies ({profile})")
-    if not pip_install(req_file):
+    if not pip_install(req_file, target_py):
         say("\nDependency install failed - see the messages above.")
         return 1
 
@@ -333,9 +403,10 @@ def main() -> int:
     say("\n============================================")
     say("  All done!")
     if IS_WINDOWS:
-        say("  Launch with:  start.bat   (or: python main.py)")
+        say("  Launch with:  start.bat")
     else:
-        say("  Launch with:  ./start.command   (or: python3 main.py)")
+        say("  Launch with:  ./start.command")
+    say("  (the launchers use the .venv automatically)")
     say(f"  Installed profile: {profile}")
     say("============================================")
     return 0
