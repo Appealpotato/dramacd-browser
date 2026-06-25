@@ -167,15 +167,29 @@ def _parse_json_list(value) -> list[str]:
 
 
 def _decode_zip_filename(info: zipfile.ZipInfo) -> str:
-    """Re-decode ZIP filename as CP932 (Shift-JIS) when UTF-8 flag is absent.
+    """Recover a ZIP filename when the archive's UTF-8 flag (0x800) is absent.
 
-    Some Japanese archives are malformed (e.g. a lead byte followed by '/'
-    instead of a proper trailing byte). Strict CP932 fails on those, so we
-    fall back to lossy CP932 decoding before giving up — most of the name
-    is then still readable, at the cost of one or two replacement chars."""
+    zipfile decodes flag-less names as CP437, which mangles non-ASCII names.
+    Two broken-archiver conventions produce such names:
+
+    * **UTF-8 bytes with the flag left unset** (many modern packers). The raw
+      bytes are valid UTF-8, so we try UTF-8 first. A byte run that decodes
+      cleanly as strict UTF-8 is virtually never coincidentally-meaningful
+      Shift-JIS, so this is safe — and it matches what 7-Zip's listing path
+      does, which is why the inline archive viewer shows the right names while
+      the old CP932-only extract did not.
+    * **Raw CP932 (Shift-JIS) bytes** (older Japanese archives). Tried second.
+      Some of these are malformed (a lead byte followed by '/' instead of a
+      proper trailing byte); strict CP932 fails there, so we fall back to lossy
+      CP932 — most of the name stays readable at the cost of a replacement char.
+    """
     if info.flag_bits & 0x800:
         return info.filename  # already UTF-8, trust zipfile's decode
     raw = info.filename.encode("cp437")  # undo zipfile's default cp437 decode
+    try:
+        return raw.decode("utf-8")
+    except (UnicodeDecodeError, ValueError):
+        pass
     try:
         return raw.decode("cp932")
     except (UnicodeDecodeError, ValueError):
@@ -186,6 +200,27 @@ def _decode_zip_filename(info: zipfile.ZipInfo) -> str:
         return info.filename  # last resort: raw cp437 mojibake
 
 
+# Characters that are illegal in Windows filenames mapped to their full-width
+# look-alikes, so a name like ``…だね?【…】.mp3`` stays readable instead of
+# losing the character. Control chars (< 0x20) are stripped outright. DLsite
+# track titles routinely contain '?', so without this the extract aborts on
+# Windows with ``OSError: [Errno 22] Invalid argument`` partway through.
+_WIN_ILLEGAL_MAP = {
+    "<": "＜", ">": "＞", ":": "：", '"': "＂",
+    "|": "｜", "?": "？", "*": "＊",
+}
+
+
+def _sanitize_path_component(part: str) -> str:
+    """Make a single path component safe to create on Windows. Never called on
+    path separators, so '/' and '\\' are left to the caller's join logic."""
+    cleaned = "".join(
+        _WIN_ILLEGAL_MAP.get(ch, ch) for ch in part if ord(ch) >= 0x20
+    )
+    cleaned = cleaned.rstrip(" .")  # Windows forbids trailing space/dot
+    return cleaned or "_"
+
+
 def _safe_extract_zip(archive_path: Path, target_dir: Path):
     target_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive_path, "r") as zf:
@@ -193,6 +228,10 @@ def _safe_extract_zip(archive_path: Path, target_dir: Path):
             member = Path(_decode_zip_filename(info))
             if member.is_absolute():
                 continue
+            # Sanitize each component so Windows-illegal characters in the
+            # decoded name (e.g. '?' in DLsite track titles) don't abort the
+            # whole extract with Errno 22 partway through.
+            member = Path(*[_sanitize_path_component(p) for p in member.parts])
             candidate = (target_dir / member).resolve()
             if not str(candidate).startswith(str(target_dir.resolve())):
                 continue
