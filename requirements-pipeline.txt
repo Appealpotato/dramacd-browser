@@ -1,0 +1,31 @@
+# Audio-transcription pipeline (Whisper + torch). Pulls in the core deps too,
+# so `pip install -r requirements-pipeline.txt` gives you a full install.
+#
+# Heavyweight: torch plus the CUDA 12 runtime is ~2-3 GB. Skip this file
+# entirely for a library-only install (see requirements-core.txt).
+
+-r requirements-core.txt
+
+# Transcription via faster-whisper (CTranslate2). We commit to the CUDA 12 lane:
+# faster-whisper 1.2.x requires ctranslate2>=4, and ctranslate2 4.x needs the CUDA 12
+# cuBLAS/cuDNN runtime (cublas64_12.dll, cudnn*64_9.dll). Those DLLs ship in the
+# nvidia-*-cu12 wheels below, so the GPU runtime is reproducible from this file alone
+# and cannot silently regress on reinstall (the old open `faster-whisper>=1.0.3` pin let
+# it float to a CUDA-12 build with no matching runtime -> "cublas64_12.dll not found").
+#
+# Do NOT mix lanes: ctranslate2 3.24.0 (the CUDA 11 path) is incompatible with
+# faster-whisper>=1.0 and would break this stack. Stay on CUDA 12, or pin the whole
+# lane down together.
+#
+# Note: device detection asks ctranslate2.get_cuda_device_count(), not torch, so a
+# CPU-only torch wheel no longer disables the GPU; torch stays unpinned to CUDA.
+faster-whisper==1.2.1
+ctranslate2==4.7.1
+torch>=2.0.0
+
+# CUDA 12 runtime for CTranslate2 (provides cublas64_12.dll / cudnn*64_9.dll on
+# Windows, the matching .so on Linux). These packages have NO macOS wheels, so the
+# environment marker skips them on Mac; CTranslate2 transparently falls back to the
+# CPU (int8) path there. On Apple Silicon there is no GPU lane for CTranslate2 at all.
+nvidia-cublas-cu12==12.9.2.10 ; platform_system != "Darwin"
+nvidia-cudnn-cu12==9.23.1.3 ; platform_system != "Darwin"

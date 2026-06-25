@@ -1,0 +1,23 @@
+# Core install: library, scanning, DLsite/metadata, AI translation, web UI.
+# Cross-platform and lightweight — no heavyweight ML deps. This is enough to
+# run the entire app EXCEPT local audio transcription (Whisper), which lives in
+# requirements-pipeline.txt.
+#
+# Install just this for a small footprint:  pip install -r requirements-core.txt
+
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- Storage / async I/O ---
+aiosqlite==0.20.0
+
+# --- Config ---
+python-dotenv>=1.0.1
+
+# --- DLsite / VNDB scraping ---
+httpx==0.28.1
+beautifulsoup4==4.12.3
+
+# --- Cover-art thumbnailing (also used by the archive viewer) ---
+Pillow>=10.0.0

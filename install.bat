@@ -7,11 +7,15 @@ echo   DramaCD Browser - First-Time Setup
 echo ============================================
 echo.
 
+REM This launcher only guarantees a Python interpreter exists. All of the real
+REM setup (dependency install, VC++ runtime, ffmpeg/7-Zip, core-vs-full choice)
+REM lives in the cross-platform install.py so it never has to be duplicated here.
+
 set "PYTHON=python"
 
 REM --- Check for an existing Python ---
 %PYTHON% --version >nul 2>&1
-if !errorlevel! equ 0 goto :install_deps
+if !errorlevel! equ 0 goto :handoff
 
 echo Python not found. Installing Python 3.12 (per-user, no admin needed)...
 echo.
@@ -50,7 +54,7 @@ for %%P in (
 ) do (
     if exist %%P (
         set "PYTHON=%%~P"
-        goto :install_deps
+        goto :handoff
     )
 )
 
@@ -60,54 +64,20 @@ echo Please close this window and double-click install.bat one more time.
 pause
 exit /b 0
 
-:install_deps
+:handoff
 echo [OK] Using Python at: %PYTHON%
 "%PYTHON%" --version
 echo.
 
-REM --- Microsoft Visual C++ Redistributable 2015-2022 (required by torch / faster-whisper) ---
-echo Checking Visual C++ Runtime...
-if exist "%WINDIR%\System32\vcruntime140_1.dll" (
-    echo [OK] Visual C++ Runtime 2015-2022 already installed.
+REM --- Hand off to the cross-platform installer ---
+"%PYTHON%" install.py %*
+set "RC=!errorlevel!"
+
+echo.
+if !RC! neq 0 (
+    echo [ERROR] Setup did not complete. See the messages above.
 ) else (
-    echo Installing Visual C++ Redistributable 2015-2022 ^(x64^)...
-    where winget >nul 2>&1
-    if !errorlevel! equ 0 (
-        winget install Microsoft.VCRedist.2015+.x64 --accept-source-agreements --accept-package-agreements --silent
-    ) else (
-        echo Downloading vc_redist.x64.exe...
-        set "VC_URL=https://aka.ms/vs/17/release/vc_redist.x64.exe"
-        set "VC_EXE=%TEMP%\vc_redist.x64.exe"
-        powershell -NoProfile -Command "try { Invoke-WebRequest -Uri '!VC_URL!' -OutFile '!VC_EXE!' -UseBasicParsing } catch { exit 1 }"
-        if exist "!VC_EXE!" (
-            "!VC_EXE!" /install /quiet /norestart
-            del "!VC_EXE!" 2>nul
-        ) else (
-            echo [WARN] Could not auto-install VC++ Runtime. torch/faster-whisper may fail to load.
-            echo        Install manually from https://aka.ms/vs/17/release/vc_redist.x64.exe
-        )
-    )
+    echo Done! Double-click start.bat to launch the app.
 )
-
-echo.
-echo Installing dependencies (this may take a few minutes)...
-echo.
-"%PYTHON%" -m pip install --upgrade pip
-"%PYTHON%" -m pip install -r requirements.txt
-if !errorlevel! neq 0 (
-    echo.
-    echo [ERROR] pip install failed. See the messages above.
-    pause
-    exit /b 1
-)
-
-echo.
-echo ============================================
-echo   All done! Double-click start.bat to launch.
-echo ============================================
-echo.
-echo Optional for transcription / RAR / 7Z extraction:
-echo   * 7-Zip:  https://www.7-zip.org/
-echo   * FFmpeg: https://www.gyan.dev/ffmpeg/builds/
-echo.
 pause
+exit /b !RC!

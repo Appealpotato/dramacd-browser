@@ -19,13 +19,27 @@ Local browser for drama CD archives with DLsite metadata, on-device transcriptio
 
 ## Run
 
-For the normal Windows path, double-click `install.bat`, then `start.bat`.
+**Windows** — double-click `install.bat`, then `start.bat`.
+
+**macOS** — double-click `install.command`, then `start.command`. First time, you may need to make them runnable (`chmod +x install.command start.command`) or right-click → Open once to clear Gatekeeper.
+
+The installer asks whether to include the audio-transcription pipeline (Whisper + torch, ~2–3 GB). Decline for a lightweight, library-only install — you can re-run it later to add the pipeline. It also offers to install the optional `ffmpeg` / `7-Zip` tools via your platform's package manager (winget on Windows, Homebrew on macOS).
+
+**Any platform, manually:**
 
 ```bash
-pip install -r requirements.txt
+python install.py            # interactive: pick core vs full, auto-installs the extra tools
+python install.py --check    # report what's installed / missing, change nothing
+
+# …or install just the Python deps yourself:
+pip install -r requirements-core.txt        # lightweight — library, scan, metadata, translation
+pip install -r requirements-pipeline.txt    # full — adds Whisper + torch for transcription
+
 python main.py
 # → open http://localhost:8080
 ```
+
+> **macOS note:** transcription runs on the CPU — CTranslate2 has no Apple-Silicon GPU path. Everything else (library, scanning, metadata, translation, player) is fully supported. On Homebrew's Python, install Tk for the native file pickers: `brew install python-tk@3.12`, and `brew install ffmpeg p7zip` for transcription / rar·7z extraction (the installer offers to do this for you).
 
 Pipeline features (extraction, transcription, translation, player) are gated behind a runtime toggle in the UI sidebar. Set `DRAMACD_ENABLE_PIPELINE=1` to start with them on, or flip the switch in the sidebar.
 
@@ -34,9 +48,9 @@ Pipeline features (extraction, transcription, translation, player) are gated beh
 ### Required for full functionality
 | Variable | Purpose |
 |---|---|
-| `DRAMACD_FFMPEG_PATH` | absolute path to `ffmpeg.exe` (Windows) — required for transcription |
-| `DRAMACD_FFPROBE_PATH` | absolute path to `ffprobe.exe` — for richer audio metadata |
-| `DRAMACD_7Z_PATH` | absolute path to `7z` — required for rar/7z extraction, and for drilling into a `.tar` packed inside a `.rar`/`.7z` wrapper. Plain `.zip` and standalone `.tar` don't need it. |
+| `DRAMACD_FFMPEG_PATH` | absolute path to the `ffmpeg` binary — only needed if it isn't auto-found on PATH or in the usual install dirs (incl. Homebrew). Required for transcription. |
+| `DRAMACD_FFPROBE_PATH` | absolute path to `ffprobe` — for richer audio metadata |
+| `DRAMACD_7Z_PATH` | absolute path to `7z` / `7zz` — required for rar/7z extraction, and for drilling into a `.tar` packed inside a `.rar`/`.7z` wrapper. Plain `.zip` and standalone `.tar` don't need it. Auto-detected on PATH and in standard install dirs (incl. Homebrew) when unset. |
 
 ### Server / scan
 | Variable | Default | Purpose |

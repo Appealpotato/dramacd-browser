@@ -101,7 +101,7 @@ AUDIO_EXTENSIONS = {
 
 def get_runtime_archive_support() -> list[str]:
     support = ["zip", "tar"]
-    if _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH"):
+    if _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH"):
         support.extend(["rar", "7z"])
     return support
 
@@ -115,21 +115,34 @@ def _find_binary(candidates: list[str], env_var: str | None = None) -> str | Non
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
+    # Fall back to well-known install locations. This matters on macOS/Linux
+    # too: a server launched from Finder/launchd inherits a minimal PATH that
+    # often omits /opt/homebrew/bin, so shutil.which() can miss a brew-installed
+    # binary that is in fact present.
     first = candidates[0].lower()
-    if first in {"7z", "7za"}:
+    if first in {"7z", "7za", "7zz"}:
         common_paths = [
             Path(r"C:\Program Files\7-Zip\7z.exe"),
             Path(r"C:\Program Files (x86)\7-Zip\7z.exe"),
+            Path("/opt/homebrew/bin/7z"), Path("/opt/homebrew/bin/7zz"),
+            Path("/usr/local/bin/7z"), Path("/usr/local/bin/7zz"),
+            Path("/usr/bin/7z"), Path("/usr/bin/7zz"),
         ]
     elif first == "ffprobe":
         common_paths = [
             Path(r"C:\ffmpeg\bin\ffprobe.exe"),
             Path(r"C:\Program Files\ffmpeg\bin\ffprobe.exe"),
+            Path("/opt/homebrew/bin/ffprobe"),
+            Path("/usr/local/bin/ffprobe"),
+            Path("/usr/bin/ffprobe"),
         ]
     elif first == "ffmpeg":
         common_paths = [
             Path(r"C:\ffmpeg\bin\ffmpeg.exe"),
             Path(r"C:\Program Files\ffmpeg\bin\ffmpeg.exe"),
+            Path("/opt/homebrew/bin/ffmpeg"),
+            Path("/usr/local/bin/ffmpeg"),
+            Path("/usr/bin/ffmpeg"),
         ]
     else:
         common_paths = []
@@ -221,7 +234,7 @@ def _safe_extract_tar(archive_path: Path, target_dir: Path):
 
 def _extract_with_7z(archive_path: Path, target_dir: Path):
     target_dir.mkdir(parents=True, exist_ok=True)
-    exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     result = subprocess.run(
@@ -357,7 +370,7 @@ def _list_with_7z(archive_path: Path) -> list[dict]:
     """Raw ``7z l -slt`` listing for .zip/.rar/.7z. Returns ``[{path, size}]``
     with directories and the archive's own self-record filtered out — but
     *not* sorted or __MACOSX-filtered (those happen in the caller)."""
-    exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     # ``-sccUTF-8`` forces 7z to emit UTF-8 on stdout regardless of the system
@@ -457,7 +470,7 @@ def _open_nested_tar(outer: Path, inner_tar_name: str):
             zf.close()
         return
 
-    exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     proc = subprocess.Popen(
@@ -686,7 +699,7 @@ def stream_archive_file(archive_path: Path, inner_path: str) -> bytes:
     if wrapper_tar:
         return _stream_member_from_nested_tar(archive_path, wrapper_tar, inner_path)
 
-    exe = _find_binary(["7z", "7za"], env_var="DRAMACD_7Z_PATH")
+    exe = _find_binary(["7z", "7za", "7zz"], env_var="DRAMACD_7Z_PATH")
     if not exe:
         raise RuntimeError("7z executable not found. Install 7-Zip or set DRAMACD_7Z_PATH.")
     # ``-so`` streams to stdout; the file we want is named on the command line.
