@@ -531,11 +531,15 @@ async def _run_translation_job_inner(job_id: int):
                 api_key=runtime_api_key or "",
             )
         else:
+            # Local OpenAI-compatible servers (LM Studio / llama.cpp / vLLM)
+            # have a fixed context window — keep each request stateless so a
+            # long track's accumulated history can't overflow it mid-job.
             translator = OpenRouterTrackTranslator(
                 api_key=runtime_api_key,
                 model=model,
                 base_url=runtime_base_url,
                 provider_label="openai_compat",
+                stateless=True,
             )
     else:
         translator = GeminiTrackTranslator(api_key=runtime_api_key, model=model)

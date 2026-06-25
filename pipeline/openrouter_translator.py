@@ -95,12 +95,19 @@ class OpenRouterTrackTranslator:
         model: str,
         base_url: str | None = None,
         provider_label: str = "openrouter",
+        stateless: bool = False,
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = (base_url or self.DEFAULT_BASE_URL).strip().rstrip("/") or self.DEFAULT_BASE_URL
         self.endpoint = _normalize_chat_completions_url(self.base_url)
         self.provider_label = provider_label
+        # Stateless: send only the current (self-contained) chunk prompt, never
+        # a growing conversation. Required for local servers (LM Studio /
+        # llama.cpp / vLLM) whose fixed context window would otherwise overflow
+        # a few chunks into a long track — same reasoning as the Ollama path.
+        # Cloud providers keep history for prompt caching.
+        self._stateless = stateless
         self._history: list[dict] = []
         # The response_format that last succeeded against this server, learned
         # on the first chunk and tried first on every later chunk so we don't
@@ -131,8 +138,26 @@ class OpenRouterTrackTranslator:
             return "\n".join(parts).strip()
         return ""
 
+    @staticmethod
+    def _is_context_length_error(text: str) -> bool:
+        """A 400 about the prompt exceeding the model's context window — NOT a
+        response_format rejection, so falling through to another format won't
+        help. Recognise the common phrasings across local servers."""
+        t = (text or "").lower()
+        return any(
+            k in t for k in (
+                "context size", "context length", "context window",
+                "maximum context", "context_length_exceeded",
+                "too many tokens", "exceeds the model",
+            )
+        )
+
     async def _send_text(self, text: str, *, json_schema: dict | None = None) -> str:
-        self._history.append({"role": "user", "content": text})
+        if self._stateless:
+            convo = [{"role": "user", "content": text}]
+        else:
+            self._history.append({"role": "user", "content": text})
+            convo = self._history
 
         # Response formats we know how to ask for, tried in order until one is
         # accepted:
@@ -166,7 +191,7 @@ class OpenRouterTrackTranslator:
             cleaned = [
                 {**m, "content": m["content"].replace(CACHE_BREAKPOINT_MARKER, "\n")}
                 if isinstance(m.get("content"), str) else m
-                for m in self._history
+                for m in convo
             ]
             request_json = {
                 "model": self.model,
@@ -195,6 +220,16 @@ class OpenRouterTrackTranslator:
 
             label = self.provider_label
             if resp.status_code >= 400:
+                # A context-window overflow is not a format problem — trying
+                # another response_format just fails again with a confusing
+                # "rejected response_format" warning. Surface it directly with
+                # an actionable hint instead.
+                if self._is_context_length_error(resp.text):
+                    raise RuntimeError(
+                        f"{label}: chunk too large for the model's context window "
+                        f"({resp.status_code}: {resp.text[:200]}). Lower 'Max tokens "
+                        f"per chunk' in Settings, or raise the server's context size."
+                    )
                 # Some OpenAI-compatible servers reject a given response_format
                 # (Anthropic shims reject them all; newer LM Studio rejects
                 # json_object specifically). Fall through to the next format.
@@ -227,7 +262,8 @@ class OpenRouterTrackTranslator:
             if out:
                 # Remember the winning format so later chunks lead with it.
                 self._preferred_rf_type = rf_name
-                self._history.append({"role": "assistant", "content": out})
+                if not self._stateless:
+                    self._history.append({"role": "assistant", "content": out})
                 return out
 
             last_detail = str(choices[0])[:300]
